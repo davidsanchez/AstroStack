@@ -21,28 +21,6 @@ import numpy as np
 LP_MAX_STRENGTH = 1.0  # la force est bornée à 100 %
 
 
-def drop_interior_islands(fg_u8: np.ndarray) -> np.ndarray:
-    """v1.1.4 : retire de l'avant-plan automatique les îlots qui ne touchent AUCUN bord de l'image.
-
-    Le sol et les arbres touchent un bord ; un îlot au milieu du ciel (nuage lumineux classé
-    « avant-plan » par le modèle) ne peut pas l'être. Pour la PL, il est donc rendu au ciel.
-    L'avant-plan peint par l'utilisateur est appliqué APRÈS, il n'est jamais retiré par ce filtre.
-    fg_u8 : uint8 HxW, 255 = avant-plan. Retourne un uint8 de même forme.
-    """
-    b = (np.asarray(fg_u8) > 127).astype(np.uint8)
-    if not b.any():
-        return np.asarray(fg_u8, dtype=np.uint8)
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(b, connectivity=8)
-    if n <= 1:
-        return b * 255
-    H, W = b.shape
-    keep = np.zeros(n, bool)
-    for i in range(1, n):
-        x, y, w, h = stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP], stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
-        keep[i] = x == 0 or y == 0 or x + w >= W or y + h >= H
-    return (keep[labels]).astype(np.uint8) * 255
-
-
 def auto_sky_weight(img_linear: np.ndarray, out_hw: tuple[int, int] | None = None, debug_cb=None,
                     top_gradient: bool = True, top_boost: float = 0.5) -> np.ndarray:
     """Poids de ciel float32 HxW (1 = ciel, 0 = avant-plan), depuis le masque automatique.
@@ -66,7 +44,6 @@ def auto_sky_weight(img_linear: np.ndarray, out_hw: tuple[int, int] | None = Non
     )
     if out_hw is not None and fg.shape[:2] != tuple(out_hw):
         fg = cv2.resize(fg, (int(out_hw[1]), int(out_hw[0])), interpolation=cv2.INTER_LINEAR)
-    fg = drop_interior_islands(fg)  # v1.1.4 : nuages « avant-plan » au milieu du ciel rendus au ciel
     return (1.0 - fg.astype(np.float32) / 255.0).astype(np.float32)
 
 
