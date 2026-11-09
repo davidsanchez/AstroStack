@@ -1094,6 +1094,8 @@ class MainWindow(QMainWindow):
             out_path=out_path,
             lp_correct=self.chk_lp.isChecked(),
             lp_strength=self.spin_lp.value() / 100.0,
+            lp_top_gradient=self.chk_top_sky.isChecked(),  # v1.1.3 : même gradient « haut = ciel » pour la PL
+            lp_top_boost=self.spin_top_boost.value(),
             lp_feather=self._lp_feather_value(),  # v0.8.15 : fondu PL réglable en UI (« auto » par défaut)
             stack_grow=self.spin_stack_grow.value(),  # v1.1.2 : marge d'empilement (px)
             meta_out=self._meta,   # v0.8.4 : sky/fg_w/stack_raw pour réappliquer la PL
@@ -1151,7 +1153,8 @@ class MainWindow(QMainWindow):
         # v1.0.0 : ciel = masque automatique calculé sur le stack (même source que le pipeline)
         from .lpcorrect import combine_painted_sky
 
-        sky = auto_sky_weight(img, debug_cb=self._log)
+        sky = auto_sky_weight(img, debug_cb=self._log,
+                              top_gradient=self.chk_top_sky.isChecked(), top_boost=self.spin_top_boost.value())
         fg_w = self._meta.get("fg_w")
         # le ciel défini par l'utilisateur (avant-plan peint) prime sur le modèle
         sky = combine_painted_sky(sky, fg_w)

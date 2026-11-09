@@ -21,7 +21,8 @@ import numpy as np
 LP_MAX_STRENGTH = 1.0  # la force est bornée à 100 %
 
 
-def auto_sky_weight(img_linear: np.ndarray, out_hw: tuple[int, int] | None = None, debug_cb=None) -> np.ndarray:
+def auto_sky_weight(img_linear: np.ndarray, out_hw: tuple[int, int] | None = None, debug_cb=None,
+                    top_gradient: bool = True, top_boost: float = 0.5) -> np.ndarray:
     """Poids de ciel float32 HxW (1 = ciel, 0 = avant-plan), depuis le masque automatique.
 
     Le masque est calculé sur l'image linéaire donnée (en pratique : le stack), avec le filtre
@@ -38,6 +39,8 @@ def auto_sky_weight(img_linear: np.ndarray, out_hw: tuple[int, int] | None = Non
         lum_edge=True,
         edge_band=40,
         guided=True,
+        top_gradient=top_gradient,  # v1.1.3 : même dégradé « haut = ciel » que le masque de l'interface
+        top_boost=top_boost,
     )
     if out_hw is not None and fg.shape[:2] != tuple(out_hw):
         fg = cv2.resize(fg, (int(out_hw[1]), int(out_hw[0])), interpolation=cv2.INTER_LINEAR)
@@ -186,7 +189,7 @@ def correct_light_pollution(
     feather: float | None = None,
     deg: int = 3,
     neutral: bool = True,
-    shared_shape: bool = False,
+    shared_shape: bool = True,  # v1.1.3 : forme commune par défaut (évite la dominante bleue sous les nuages chauds)
     return_background: bool = False,
     debug_cb=None,
 ):

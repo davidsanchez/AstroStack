@@ -133,7 +133,7 @@ def make_colour_shape_scene(seed: int = 5):
 def test_per_channel_gradient_and_neutral_sky():
     img, fgt = make_colour_shape_scene(5)
     sky = auto_like_sky(img, fgt)
-    out = correct_light_pollution(img, sky, strength=1.0)  # v1.1.0 : par canal + fond neutre
+    out = correct_light_pollution(img, sky, strength=1.0, shared_shape=False)  # v1.1.0 : par canal + fond neutre
     shared = correct_light_pollution(img, sky, strength=1.0, shared_shape=True, neutral=False)
     for c in range(3):
         g_out = abs(grad_of(out, c))

@@ -59,6 +59,8 @@ def run_pipeline(
     lp_correct: bool = False,
     lp_strength: float = 1.0,
     lp_feather: float | None = None,
+    lp_top_gradient: bool = True,
+    lp_top_boost: float = 0.5,
     meta_out: dict | None = None,
     progress_cb=None,
     should_cancel=None,
@@ -240,7 +242,9 @@ def run_pipeline(
 
         cb(3, 0, 1, f"Correction de la pollution lumineuse — force {lp_strength:.0%}, ciel détecté par le masque automatique…")
         try:
-            sky_lp = auto_sky_weight(result, out_hw=wh, debug_cb=lambda m: cb(3, 0, 1, m))
+            # v1.1.3 : le masque PL reprend le réglage « Gradient Ciel favorisé » de l'interface
+            sky_lp = auto_sky_weight(result, out_hw=wh, debug_cb=lambda m: cb(3, 0, 1, m),
+                                     top_gradient=lp_top_gradient, top_boost=lp_top_boost)
             # le ciel défini par l'utilisateur (avant-plan peint) prime sur le modèle
             from .lpcorrect import combine_painted_sky
             sky_lp = combine_painted_sky(sky_lp, fg_w if mask is not None else None)
