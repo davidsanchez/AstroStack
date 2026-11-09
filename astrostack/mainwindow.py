@@ -574,13 +574,18 @@ class MainWindow(QMainWindow):
             "« Affiner la luminance » cochée, Seuil 0 (auto), Bande 40 px, Rés. 2000 px."
         )
         self.btn_lum_reset.clicked.connect(self._reset_lum_params)
-        row_lum.addWidget(self.btn_lum_reset)
         lay_mask.addLayout(row_lum)
+        # v1.2.0 : « Masque auto » et « Par défaut » sur la même ligne
+        row_auto = QHBoxLayout()
+        row_auto.setContentsMargins(0, 0, 0, 0)
+        row_auto.setSpacing(4)
         btn_ml = QPushButton("Masque auto (ONNX)")
         btn_ml.setToolTip("Segmente le ciel avec un modèle ONNX (segformer ADE20K), téléchargeable automatiquement. "
                          "Installez onnxruntime : pip install onnxruntime")
         btn_ml.clicked.connect(self._ml_mask)
-        lay_mask.addWidget(btn_ml)
+        row_auto.addWidget(btn_ml, 1)
+        row_auto.addWidget(self.btn_lum_reset)
+        lay_mask.addLayout(row_auto)
         left.addWidget(box_mask)
 
 
