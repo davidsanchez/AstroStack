@@ -31,6 +31,11 @@ def main(argv=None) -> None:
         help="génère le masque depuis la 1ère light : 'heuristic' (seuil) ou 'ml' (ONNX, nécessite onnxruntime)",
     )
     p.add_argument(
+        "--no-mask-guided",
+        action="store_true",
+        help="v0.9.0 : désactive le filtre guidé et le seuil local du masque ML (retour au comportement v0.8.x)",
+    )
+    p.add_argument(
         "--no-mask-lum",
         action="store_true",
         help="v0.8.11 : désactive l'affinage du masque ML par luminance (défaut : ACTIF avec "
@@ -58,7 +63,8 @@ def main(argv=None) -> None:
         "(défaut 2000 ; 1200 avant) — plus grand = détails plus fins mais plus lent",
     )
     p.add_argument("--out", default="astrostack_result.tif")
-    p.add_argument("--mode", choices=["sigma", "mean"], default="sigma")
+    p.add_argument("--mode", choices=["sigma", "robust", "mean"], default="sigma",
+                   help="sigma (défaut) ; robust = rejet centré sur la médiane (expérimental) ; mean = moyenne simple")
     p.add_argument("--kappa", type=float, default=2.5)
     p.add_argument(
         "--no-ecc",
@@ -145,7 +151,7 @@ def main(argv=None) -> None:
             from .mlmask import foreground_mask_from_linear
 
             fg = foreground_mask_from_linear(img, debug_cb=lambda m: print("[ML]", m, flush=True),
-                                             top_gradient=False, grow=0, smooth=1, proba_blur=0, morph=False)
+                                             top_gradient=False, grow=0, smooth=1, proba_blur=0, morph=False, guided=False)
             fg_w = fg.astype(np.float32) / 255.0
             sky = 1.0 - fg_w
             print("Masque PL : ONNX brut (seuil 0,5) depuis le TIFF", flush=True)
@@ -204,6 +210,7 @@ def main(argv=None) -> None:
             mask = sky_to_foreground_mask(  # v0.8.11 : affinage luminance ; v0.8.12 : grow=0 ; v0.8.14 : bord luminance + bande
                 u8, grow=0, lum_refine=not args.no_mask_lum, lum_thr=(args.mask_lum_thr or None),
                 lum_edge=args.mask_edge_band > 0, edge_band=args.mask_edge_band,
+                guided=not args.no_mask_guided,  # v0.9.0 : filtre guidé pleine résolution (détails fins)
             )
         else:
             lum = (0.2126 * u8[..., 0] + 0.7152 * u8[..., 1] + 0.0722 * u8[..., 2]).astype(np.uint8)
