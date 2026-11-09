@@ -124,7 +124,21 @@ def estimate_background(img: np.ndarray, sky_w: np.ndarray, deg: int = 3, max_sm
     if small.ndim == 2:
         small = small[..., None]
     sky_small = cv2.resize(sky_w.astype(np.float32), (sw, sh), interpolation=cv2.INTER_AREA) >= 0.99
-    idx = sky_small.ravel()
+    # v1.1.4 : enveloppe basse par bloc. Un nuage est plus clair que le ciel voisin : dans chaque
+    # bloc on ne garde que les pixels les plus sombres (30e percentile de luminance). Le gradient de
+    # pollution, lent, est conservé ; la lueur des nuages n'attire plus le fond.
+    lum_s = small.mean(axis=-1) if small.ndim == 3 else small[..., 0]
+    blk_px = 16
+    keep = np.zeros_like(sky_small)
+    for y0 in range(0, sh, blk_px):
+        for x0 in range(0, sw, blk_px):
+            blk = sky_small[y0:y0 + blk_px, x0:x0 + blk_px]
+            if int(blk.sum()) < 8:
+                continue
+            lv = lum_s[y0:y0 + blk_px, x0:x0 + blk_px]
+            thr = float(np.percentile(lv[blk], 30))
+            keep[y0:y0 + blk_px, x0:x0 + blk_px] = blk & (lv <= thr)
+    idx = keep.ravel()
     if int(idx.sum()) < 50:
         return None
     B = _poly_basis(sh, sw, deg)
