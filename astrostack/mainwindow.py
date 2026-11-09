@@ -1193,7 +1193,7 @@ class MainWindow(QMainWindow):
             wsh = self._meta.get("work_shape") or img.shape[:2]
             fg = foreground_mask_from_linear(load_image_linear(ref_path).astype(np.float32),
                                              debug_cb=self._log, top_gradient=False, top_boost=0.5,
-                                             grow=0, smooth=1, proba_blur=0, morph=False)  # v0.8.7/0.8.9 : ONNX 100 % brut pour la PL
+                                             guided=False, grow=0, smooth=1, proba_blur=0, morph=False)  # v0.8.7/0.8.9 + v0.9.0 : PL sans filtre guidé : ONNX 100 % brut pour la PL
             fg = cv2.resize(fg, (wsh[1], wsh[0]), interpolation=cv2.INTER_NEAREST)
             sky = 1.0 - feather(fg, sigma=max(2.0, min(wsh) * 0.004))
             self._log("Masque PL : ONNX brut (seuil 0,5, sans lissage ni dilatation).")

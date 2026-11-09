@@ -245,7 +245,7 @@ def run_pipeline(
             fg_ml = foreground_mask_from_linear(
                 ref, debug_cb=lambda m: cb(3, 0, 1, m),
                 top_gradient=False, top_boost=0.5, grow=0,  # v0.8.7 : pas de dilatation ni de dégradé pour la PL
-                smooth=1, proba_blur=0, morph=False,          # v0.8.9 : masque ONNX 100 % BRUT (aucun lissage ni morphologie)
+                guided=False, smooth=1, proba_blur=0, morph=False,          # v0.8.9 + v0.9.0 : pas de filtre guidé (PL inchangée) : masque ONNX 100 % BRUT (aucun lissage ni morphologie)
             )
             m_ml = cv2.resize(fg_ml, (wh[1], wh[0]), interpolation=cv2.INTER_NEAREST)
             sky_lp = 1.0 - feather(m_ml, sigma=max(2.0, min(wh) * 0.004))
