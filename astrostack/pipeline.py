@@ -53,6 +53,7 @@ def run_pipeline(
     kappa: float = 2.5,
     refine_ecc: bool = True,
     refine_local: bool = True,
+    stack_grow: int = 2,
     ref_index: int = 0,
     out_path: str | None = None,
     lp_correct: bool = False,
@@ -171,8 +172,16 @@ def run_pipeline(
         k = max(3, int(round(min(wh) * 0.005))) | 1
         m = cv2.dilate(m, np.ones((k, k), np.uint8))
         fg_w = feather(m, sigma=max(2.0, min(wh) * 0.004))
+        # v0.9.2 : marge de stacking (2 px par défaut) — elle ne sert QU'À l'empilement :
+        # ni dans le masque affiché/exporté (fg_w), ni dans la correction de pollution lumineuse.
+        if stack_grow > 0:
+            m_stack = cv2.dilate(m, np.ones((3, 3), np.uint8), iterations=int(stack_grow))
+            fg_stack = feather(m_stack, sigma=max(2.0, min(wh) * 0.004))
+        else:
+            fg_stack = fg_w
     else:
         fg_w = np.zeros(wh, dtype=np.float32)
+        fg_stack = fg_w
     sky = 1.0 - fg_w
 
     n = len(lights)
@@ -221,7 +230,7 @@ def run_pipeline(
         )
 
     # --- empilement ---
-    result = stack_frames(get_frame, transforms, fg_w, mode=mode, kappa=kappa, progress_cb=cb)
+    result = stack_frames(get_frame, transforms, fg_stack, mode=mode, kappa=kappa, progress_cb=cb)
     if meta_out is not None:  # v0.8.4 : données pour réappliquer la PL sans re-stacker
         meta_out["stack_raw"] = result
         meta_out["sky"] = sky
