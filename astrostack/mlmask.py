@@ -137,8 +137,12 @@ def guided_refine(p: np.ndarray, img_u8_rgb: np.ndarray, radius: int | None = No
     return np.clip(q, 0.0, 1.0).astype(np.float32)
 
 
-def local_luma_threshold(lum: np.ndarray, fg: np.ndarray, t_global: float,
-                         sigma: float | None = None) -> np.ndarray:
+def local_luma_split(lum: np.ndarray, fg: np.ndarray, t_global: float,
+                     sigma: float | None = None):
+    """Retourne (alpha_lum, contraste, t) où `alpha_lum` est une fraction d'avant-plan 0..1
+    estimée PIXEL PAR PIXEL depuis la luminance, entre la moyenne locale « ciel » (0) et
+    « avant-plan » (1). Un pixel mélangé (à cheval sur le bord) reçoit donc la bonne valeur
+    intermédiaire, et le seuil 0,5 tombe au milieu exact du contour."""
     """v0.9.0 — seuil de luminance LOCAL : pour chaque pixel, moyenne des luminances
     estimées « avant-plan » (pondérées par `fg`) et « ciel » (pondérées par 1 - fg),
     toutes deux par flou gaussien. Une scène sombre, ou un ciel plus lumineux d'un côté
@@ -155,9 +159,13 @@ def local_luma_threshold(lum: np.ndarray, fg: np.ndarray, t_global: float,
     ws = cv2.GaussianBlur(sk, (0, 0), sigma)
     mf = cv2.GaussianBlur(lum * fg, (0, 0), sigma) / np.maximum(wf, 1e-4)
     ms = cv2.GaussianBlur(lum * sk, (0, 0), sigma) / np.maximum(ws, 1e-4)
-    t = 0.5 * (mf + ms)
+    contrast = (ms - mf).astype(np.float32)  # > 0 : avant-plan plus sombre que le ciel autour
     fallback = (wf < 0.02) | (ws < 0.02)
-    return np.where(fallback, t_global, t).astype(np.float32)
+    safe = np.where(np.abs(contrast) < 1e-6, 1e-6, contrast)
+    alpha = np.clip((ms - lum) / safe, 0.0, 1.0).astype(np.float32)
+    t = 0.5 * (mf + ms)
+    return (np.where(fallback, 0.0, alpha).astype(np.float32),
+            np.where(fallback, 0.0, contrast), np.where(fallback, t_global, t).astype(np.float32))
 
 
 def predict_sky_mask(img_u8_rgb: np.ndarray, path: str | None = None, input_size: int = 512,
@@ -217,6 +225,7 @@ def refine_foreground(fg: np.ndarray, img_u8_rgb: np.ndarray, *, debug_cb=None,
                       lum_refine: bool = False, lum_thr: float | None = None, lum_add: float = 1.5,
                       lum_edge: bool = False, edge_band: int = 40, local_thr: bool = True,
                       guided: bool = True, guide_radius: int | None = None, guide_eps: float = 1e-3,
+                      lum_min_contrast: float = 0.02,
                       grow: int = 0, drop_small: float = 0.0015, edge_smooth: int = 5,
                       morph: bool = True, smooth: int = 3) -> np.ndarray:
     """Affinage d'un masque d'avant-plan SOUPLE `fg` (HxW float 0..1, 1 = avant-plan)
@@ -225,10 +234,14 @@ def refine_foreground(fg: np.ndarray, img_u8_rgb: np.ndarray, *, debug_cb=None,
     Étapes (toutes optionnelles) :
       lum_refine : affinage global par luminance, ancré sur le masque (v0.8.11/0.8.12).
       lum_edge   : bord recalé sur la luminance pleine résolution dans une bande ±edge_band
-                   px ; seuil LOCAL si `local_thr` (v0.9.0), sinon Otsu global (v0.8.14).
+                   px. Avec `local_thr` (v0.9.0) : fraction d'avant-plan par pixel entre les
+                   moyennes locales ciel / avant-plan (luminance légèrement lissée), appliquée
+                   seulement si le contraste local vaut au moins `lum_min_contrast` ; sinon on
+                   garde la décision du modèle. Sans `local_thr` : seuil Otsu global (v0.8.14).
       guided     : filtre guidé sur la luminance pleine résolution (v0.9.0). Sur ce chemin,
                    le lissage médian et l'ouverture morphologique sont sautés (ils effaçaient
-                   les branches fines) et le résultat reste souple au bord.
+                   les branches fines). Le masque reste souple au bord, et n'est jamais élargi
+                   au-delà de la zone retenue (un élargissement faisait déborder l'avant-plan).
       drop_small : supprime les îlots d'avant-plan sans lien (artefacts, bruit).
     Les autres paramètres (grow, edge_smooth, morph, smooth) ne servent qu'à l'ancien chemin
     `guided=False`, conservé pour le masque de correction de pollution lumineuse.
@@ -269,14 +282,22 @@ def refine_foreground(fg: np.ndarray, img_u8_rgb: np.ndarray, *, debug_cb=None,
         kB = np.ones((2 * B + 1, 2 * B + 1), np.uint8)
         band = (cv2.dilate(fg_bin, kB) > 0) & (cv2.erode(fg_bin, kB) == 0)  # frontière ±B px
         if local_thr:  # v0.9.0 : seuil local — scènes sombres, lueur d'horizon
-            thr_map = local_luma_threshold(lum, fg, t)
-            _dbg(f"ML : bord recalé sur un seuil de luminance LOCAL (repli {t * 255:.0f}/255) "
-                 f"dans une bande de ±{B} px")
+            # Bruit du capteur : sur un ciel sombre, le bruit par pixel est de l'ordre du contraste ;
+            # un léger lissage (σ 1,5 px) de la luminance réduit ces faux avant-plans près de l'horizon.
+            lum_s = cv2.GaussianBlur(lum, (0, 0), 1.5)
+            alpha, contrast, _ = local_luma_split(lum_s, fg, t)
+            # La luminance ne décide que si le contraste local est net (sinon, sur un ciel
+            # sombre et bruité, elle classerait du ciel en avant-plan) : sinon, décision du modèle.
+            usable = (contrast >= lum_min_contrast) & (contrast > 0)
+            fg = np.where(band & usable, alpha, fg)
+            _dbg(f"ML : bord recalé par luminance LOCALE (repli {t * 255:.0f}/255) "
+                 f"dans une bande de ±{B} px ; contraste net sur "
+                 f"{float((band & usable).sum()) / max(1.0, float(band.sum())):.0%} de la bande")
         else:
             thr_map = t
+            fg = np.where(band, (lum <= thr_map).astype(np.float32), fg)
             _dbg(f"ML : bord recalé sur la luminance dans une bande de ±{B} px "
                  f"(seuil {t:.3f} = {t * 255:.0f}/255) — détails fins au bord, ciel loin du bord intact")
-        fg = np.where(band, (lum <= thr_map).astype(np.float32), fg)
     if guided:  # v0.9.0 : bord recalé sur les contours réels de la luminance, pleine résolution
         r_ = guide_radius if guide_radius is not None else max(2, int(round(min(h, w) / 700.0)))
         fg = guided_refine(fg, img_u8_rgb, radius=r_, eps=guide_eps)
@@ -296,10 +317,11 @@ def refine_foreground(fg: np.ndarray, img_u8_rgb: np.ndarray, *, debug_cb=None,
                 _dbg(f"ML : {dropped} îlot(s) d'avant-plan < {min_area:.0f} px supprimés (sans lien avec le gros blob)")
 
     if guided:
-        # Chemin v0.9.0 : on garde la valeur souple du filtre, limitée aux zones retenues
-        # (dilatation de 2 px pour ne pas couper le bord souple des zones gardées).
-        keep = cv2.dilate(b, np.ones((3, 3), np.uint8), iterations=2 + max(0, grow))
-        soft = np.clip(fg, 0.0, 1.0) * keep.astype(np.float32)
+        # Chemin v0.9.0 : on garde la valeur souple du filtre, STRICTEMENT limitée aux pixels
+        # retenus (b). Une dilatation ici laissait déborder l'avant-plan de 1-2 px dans le ciel.
+        if grow > 0:
+            b = cv2.dilate(b, np.ones((3, 3), np.uint8), iterations=grow)
+        soft = np.clip(fg, 0.0, 1.0) * b.astype(np.float32)
         return (soft * 255.0).round().astype(np.uint8)
 
     # Ancien chemin (guided=False) : nettoyage morphologique et lissage, inchangés.
