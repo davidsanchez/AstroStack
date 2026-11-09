@@ -765,6 +765,8 @@ class MainWindow(QMainWindow):
         for b in (box_img, box_dark, box_flat, box_bias, box_opt, box_lp):
             b.chk.toggled.connect(self._on_box_toggled)
 
+        # v1.2.0 : éléments masqués en mode simple (les valeurs restent celles de l'interface)
+        self._expert_only = [box_flat, box_bias, box_opt, box_lp, self.progress, self.log]
         # ---------- zone droite ----------
         right = QVBoxLayout()
         topbar = QHBoxLayout()
@@ -799,7 +801,22 @@ class MainWindow(QMainWindow):
         btn_z100.clicked.connect(lambda: (self._zoom_view().zoom_100(), self._update_zoom_label()))
         for w_ in (btn_zm, self.lbl_zoom, btn_zp, btn_zfit, btn_z100):
             zoom_bar.addWidget(w_)
+        # v1.2.0 : mode simple / expert (ON = expert : tout est visible)
+        self.btn_expert = QPushButton()
+        self.btn_expert.setCheckable(True)
+        self.btn_expert.setToolTip(
+            "Mode expert ON : toutes les options. OFF (simple) : Images, Darks, dossier de sortie, "
+            "Masque, Lancer / Arrêter.")
+        self.btn_expert.toggled.connect(self._set_expert_mode)
+        zoom_bar.addSpacing(12)
+        zoom_bar.addWidget(self.btn_expert)
         right.addLayout(zoom_bar)
+        try:
+            expert0 = bool(SETTINGS.value("expert_mode", False, type=bool))
+        except Exception:
+            expert0 = False
+        self.btn_expert.setChecked(expert0)   # déclenche _set_expert_mode
+        self._set_expert_mode(expert0)
 
         self.tabs = QTabWidget()
         self.mask_editor = MaskEditor()
@@ -1094,6 +1111,21 @@ class MainWindow(QMainWindow):
                 self._bump_brush(+10 if delta > 0 else -10)
                 return True  # événement consommé : la molette ne fait pas défiler la vue
         return super().eventFilter(obj, ev)
+
+    def _set_expert_mode(self, on: bool) -> None:
+        """Mode expert (ON) : toutes les sections. Mode simple (OFF) : les sections de
+        _expert_only sont masquées ; le choix est mémorisé."""
+        on = bool(on)
+        for w_ in self._expert_only:
+            w_.setVisible(on)
+        self.btn_expert.blockSignals(True)
+        self.btn_expert.setChecked(on)
+        self.btn_expert.blockSignals(False)
+        self.btn_expert.setText("Mode expert : ON" if on else "Mode expert : OFF")
+        try:
+            SETTINGS.setValue("expert_mode", on)
+        except Exception:
+            pass
 
     def _zoom_view(self):
         """Vue dont la barre de zoom règle l'échelle : aperçu de référence ou résultat."""
