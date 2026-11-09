@@ -766,7 +766,7 @@ class MainWindow(QMainWindow):
             b.chk.toggled.connect(self._on_box_toggled)
 
         # v1.2.0 : éléments masqués en mode simple (les valeurs restent celles de l'interface)
-        self._expert_only = [box_flat, box_bias, box_opt, box_lp, self.progress, self.log]
+        self._expert_only = [box_flat, box_bias, box_opt, box_lp, self.log]  # barre de progression visible en mode simple
         # ---------- zone droite ----------
         right = QVBoxLayout()
         topbar = QHBoxLayout()
