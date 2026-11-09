@@ -586,6 +586,19 @@ class MainWindow(QMainWindow):
         row_auto.addWidget(btn_ml, 1)
         row_auto.addWidget(self.btn_lum_reset)
         lay_mask.addLayout(row_auto)
+
+        def _layout_widgets(lay):
+            out = []
+            for i in range(lay.count()):
+                it = lay.itemAt(i)
+                if it.widget() is not None:
+                    out.append(it.widget())
+                elif it.layout() is not None:
+                    out += _layout_widgets(it.layout())
+            return out
+        # v1.2.0 : réglages avancés du masque, visibles seulement en mode expert
+        self._expert_mask = ([self.chk_lum_refine, self.btn_lum_reset]
+                             + _layout_widgets(row_grow) + _layout_widgets(row_lum))
         left.addWidget(box_mask)
 
 
@@ -1117,7 +1130,7 @@ class MainWindow(QMainWindow):
         """Mode expert (ON) : toutes les sections. Mode simple (OFF) : les sections de
         _expert_only sont masquées ; le choix est mémorisé."""
         on = bool(on)
-        for w_ in self._expert_only:
+        for w_ in self._expert_only + self._expert_mask:
             w_.setVisible(on)
         self.btn_expert.blockSignals(True)
         self.btn_expert.setChecked(on)
