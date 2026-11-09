@@ -273,6 +273,7 @@ from .maskwidget import MaskEditor
 from .pipeline import run_pipeline
 from .preview import u16_to_qimage
 from .rawio import SUPPORTED_EXTS, list_image_files, load_image_linear
+from .zoomview import ZOOM_STEP, ResultCanvas, ZoomScroll
 
 IMG_FILTER = "Images (*" + " *".join(SUPPORTED_EXTS) + ")"
 SETTINGS = QSettings("AstroStack", "AstroStack")
@@ -770,19 +771,46 @@ class MainWindow(QMainWindow):
         topbar.addStretch(1)
         right.addLayout(topbar)
 
+        # barre de zoom : agit sur l'onglet affiché (Référence ou Résultat)
+        zoom_bar = QHBoxLayout()
+        zoom_bar.addStretch(1)
+        btn_zm = QPushButton("−")
+        btn_zp = QPushButton("+")
+        btn_zfit = QPushButton("Ajuster")
+        btn_z100 = QPushButton("100 %")
+        for b in (btn_zm, btn_zp):
+            b.setFixedWidth(34)
+        btn_zm.setToolTip("Dézoomer (Ctrl + molette)")
+        btn_zp.setToolTip("Zoomer (Ctrl + molette)")
+        btn_zfit.setToolTip("Ajuster à la fenêtre et centrer")
+        btn_z100.setToolTip("Taille réelle (100 %)")
+        self.lbl_zoom = QLabel("")
+        self.lbl_zoom.setMinimumWidth(90)
+        self.lbl_zoom.setAlignment(Qt.AlignCenter)
+        btn_zm.clicked.connect(lambda: self._zoom_current(1.0 / ZOOM_STEP))
+        btn_zp.clicked.connect(lambda: self._zoom_current(ZOOM_STEP))
+        btn_zfit.clicked.connect(lambda: (self._zoom_view().zoom_fit(), self._update_zoom_label()))
+        btn_z100.clicked.connect(lambda: (self._zoom_view().zoom_100(), self._update_zoom_label()))
+        for w_ in (btn_zm, self.lbl_zoom, btn_zp, btn_zfit, btn_z100):
+            zoom_bar.addWidget(w_)
+        right.addLayout(zoom_bar)
+
         self.tabs = QTabWidget()
         self.mask_editor = MaskEditor()
-        self.mask_scroll = QScrollArea()
+        self.mask_scroll = ZoomScroll()
         self.mask_scroll.setWidget(self.mask_editor)
-        self.mask_scroll.setAlignment(Qt.AlignCenter)
-        self.mask_editor.installEventFilter(self)          # molette souris = taille du pinceau
+        self.mask_editor.installEventFilter(self)          # molette = pinceau ; Ctrl+molette = zoom
         self.mask_scroll.viewport().installEventFilter(self)
         self.tabs.addTab(self.mask_scroll, "Référence")
-        self.result_label = QLabel("Le résultat apparaîtra ici.")
-        self.result_scroll = QScrollArea()
-        self.result_scroll.setWidget(self.result_label)
-        self.result_label.setAlignment(Qt.AlignCenter)
+        self.result_canvas = ResultCanvas()
+        self.result_scroll = ZoomScroll()
+        self.result_scroll.setWidget(self.result_canvas)
+        self.result_canvas.installEventFilter(self)
+        self.result_scroll.viewport().installEventFilter(self)
         self.tabs.addTab(self.result_scroll, "Résultat")
+        self.tabs.currentChanged.connect(lambda _i: self._update_zoom_label())
+        self.mask_scroll.resized.connect(self._update_zoom_label)
+        self.result_scroll.resized.connect(self._update_zoom_label)
         right.addWidget(self.tabs, 1)
 
         rightw = QWidget()
@@ -826,11 +854,6 @@ class MainWindow(QMainWindow):
         self._log("Prêt. Ajoutez des lights (RAW CR2/DNG/…) — l'aperçu de la référence (image du milieu) se charge automatiquement.")
 
     # ---------- persistance ----------
-    def resizeEvent(self, ev) -> None:
-        super().resizeEvent(ev)
-        if getattr(self, "result_scroll", None) is not None:
-            self._fit_result()  # l'aperçu du résultat suit la taille de la fenêtre
-
     def closeEvent(self, ev) -> None:
         SETTINGS.setValue("geometry", self.saveGeometry())
         SETTINGS.setValue("panel_visible", self.btn_toggle.isChecked())
@@ -1015,10 +1038,7 @@ class MainWindow(QMainWindow):
         # la zone visible (plafond 1200 px) ; la barre de déroulement intervient si la
         # fenêtre est ensuite plus petite. Le masque peint est re-redimensionné à la
         # pleine résolution par le pipeline, donc peindre sur l'aperçu réduit est sûr.
-        vp = self.mask_scroll.viewport().size()
-        scale = min(1.0, 1200.0 / max(h, w))
-        if vp.width() > 60 and vp.height() > 60:
-            scale = min(scale, (vp.width() - 10) / w, (vp.height() - 10) / h)
+        scale = min(1.0, 2000.0 / max(h, w))   # v1.2.0 : l'aperçu s'ajuste à la fenêtre (zoom ensuite)
         if scale < 1.0:
             import cv2
 
@@ -1045,12 +1065,38 @@ class MainWindow(QMainWindow):
 
     def eventFilter(self, obj, ev):
         """Molette de la souris sur l'aperçu de la référence -> pinceau +/- 10 px."""
-        if ev.type() == QEvent.Wheel and obj in (self.mask_editor, self.mask_scroll.viewport()):
+        if ev.type() == QEvent.Wheel and obj in (self.mask_editor, self.mask_scroll.viewport(),
+                                                 self.result_canvas, self.result_scroll.viewport()):
             delta = ev.angleDelta().y()
-            if delta:
+            if delta and (ev.modifiers() & Qt.ControlModifier):
+                # Ctrl + molette : zoom de la vue active
+                view = self.mask_editor if obj in (self.mask_editor, self.mask_scroll.viewport()) else self.result_canvas
+                view.zoom_by(ZOOM_STEP if delta > 0 else 1.0 / ZOOM_STEP)
+                self._update_zoom_label()
+                return True
+            if delta and obj in (self.mask_editor, self.mask_scroll.viewport()):
                 self._bump_brush(+10 if delta > 0 else -10)
                 return True  # événement consommé : la molette ne fait pas défiler la vue
         return super().eventFilter(obj, ev)
+
+    def _zoom_view(self):
+        """Vue dont la barre de zoom règle l'échelle : aperçu de référence ou résultat."""
+        return self.mask_editor if self.tabs.currentIndex() == 0 else self.result_canvas
+
+    def _zoom_current(self, factor: float) -> None:
+        self._zoom_view().zoom_by(factor)
+        self._update_zoom_label()
+
+    def _update_zoom_label(self, *_args) -> None:
+        view = self._zoom_view()
+        if view is self.mask_editor and not self.mask_editor.has_image():
+            self.lbl_zoom.setText("")
+            return
+        if view is self.result_canvas and self.result_canvas._pix is None:
+            self.lbl_zoom.setText("")
+            return
+        pct = round(view.zoom_scale() * 100)
+        self.lbl_zoom.setText(f"{pct} %  (ajusté)" if view.zoom_is_fit() else f"{pct} %")
 
     def _show_shortcuts(self) -> None:
         """F1 : affiche les raccourcis clavier (boîte de dialogue + log)."""
@@ -1287,17 +1333,9 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
 
     def _fit_result(self):
-        """L'aperçu du résultat tient dans la fenêtre : il est redimensionné à la zone
-        visible (la barre de déroulement intervient si la fenêtre est plus petite)."""
-        pix = self._result_full
-        if pix is None or pix.isNull():
-            return
-        vp = self.result_scroll.viewport().size()
-        if vp.width() < 10 or vp.height() < 10:
-            return
-        scaled = pix.scaled(vp.width() - 4, vp.height() - 4, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.result_label.setPixmap(scaled)
-        self.result_label.resize(scaled.size())
+        """Affiche le résultat dans la vue zoomable (ajusté et centré par défaut)."""
+        self.result_canvas.set_pixmap(self._result_full)
+        self._update_zoom_label()
 
     def _on_failed(self, msg):
         self.btn_run.setEnabled(True)

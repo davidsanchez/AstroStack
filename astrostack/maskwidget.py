@@ -8,16 +8,19 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QPointF
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from .preview import qimage_to_u8_rgb
+from .zoomview import ZoomMixin
 
 
-class MaskEditor(QWidget):
+class MaskEditor(ZoomMixin, QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._init_zoom()
+        self._pos_w: tuple[float, float] | None = None  # position du pinceau (pixels du widget)
         self.setMouseTracking(True)
         self._qimg: QImage | None = None
         self._mask: np.ndarray | None = None  # uint8 HxW, 255 = avant-plan peint
@@ -34,8 +37,12 @@ class MaskEditor(QWidget):
         self._qimg = qimg
         self._mask = np.zeros((qimg.height(), qimg.width()), dtype=np.uint8)
         self._fit = np.zeros((qimg.height(), qimg.width()), dtype=np.uint8)
-        self.setFixedSize(qimg.width(), qimg.height())
-        self.update()
+        self.refresh_zoom()
+
+    def _content_size(self) -> tuple[int, int]:
+        if self._qimg is None:
+            return (0, 0)
+        return (self._qimg.width(), self._qimg.height())
 
     def image(self) -> QImage | None:
         """QImage actuellement affichée (pour alimenter le masque ML)."""
@@ -106,12 +113,22 @@ class MaskEditor(QWidget):
 
     # --- peinture ---
     def _img_pos(self, ev) -> tuple[int, int] | None:
-        if self._qimg is None:
+        """Coordonnées image (pixels du masque) sous le curseur, en tenant compte du zoom."""
+        if self._qimg is None or self.width() <= 0:
             return None
+        iw, ih = self._qimg.width(), self._qimg.height()
         x, y = ev.position().x(), ev.position().y()
-        if 0 <= x < self._qimg.width() and 0 <= y < self._qimg.height():
-            return int(x), int(y)
+        ix = int(x * iw / self.width())
+        iy = int(y * ih / self.height())
+        if 0 <= ix < iw and 0 <= iy < ih and 0 <= x < self.width() and 0 <= y < self.height():
+            return ix, iy
         return None
+
+    def _brush_px(self) -> float:
+        """Rayon du pinceau en pixels du widget (il suit le zoom)."""
+        if self._qimg is None or self.width() <= 0:
+            return max(1.0, self.brush_size / 2)
+        return max(1.0, self.brush_size / 2) * self.width() / self._qimg.width()
 
     def _paint(self, ev) -> None:
         pos = self._img_pos(ev)
@@ -136,6 +153,7 @@ class MaskEditor(QWidget):
 
     def mouseMoveEvent(self, ev) -> None:
         self._pos = self._img_pos(ev)
+        self._pos_w = (ev.position().x(), ev.position().y()) if self._pos is not None else None
         if self._painting and (ev.buttons() & Qt.LeftButton):
             self._paint(ev)
         self.update()
@@ -156,8 +174,9 @@ class MaskEditor(QWidget):
 
     def paintEvent(self, ev) -> None:
         p = QPainter(self)
+        full = QRectF(0, 0, self.width(), self.height())
         if self._qimg is not None:
-            p.drawImage(0, 0, self._qimg)
+            p.drawImage(full, self._qimg)
         else:
             p.fillRect(self.rect(), QColor(30, 30, 30))
         if self._qimg is not None and self._mask is not None:
@@ -166,7 +185,7 @@ class MaskEditor(QWidget):
             rgba[..., 0] = 255  # rouge
             rgba[..., 3] = (self._mask > 0).astype(np.uint8) * 110  # alpha
             overlay = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
-            p.drawImage(0, 0, overlay)
+            p.drawImage(full, overlay)
             if self._mask.any():
                 mg = self._margin()
                 rgba2 = np.zeros((h, w, 4), dtype=np.uint8)
@@ -174,7 +193,7 @@ class MaskEditor(QWidget):
                 rgba2[..., 1] = 140   # orange : extension par dilatation (marge)
                 rgba2[..., 3] = mg * 150
                 ov2 = QImage(rgba2.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
-                p.drawImage(0, 0, ov2)
+                p.drawImage(full, ov2)
         if self._qimg is not None and self._fit is not None and self._fit.any():
             h, w = self._fit.shape
             rgba = np.zeros((h, w, 4), dtype=np.uint8)
@@ -183,10 +202,10 @@ class MaskEditor(QWidget):
             rgba[..., 2] = 255
             rgba[..., 3] = (self._fit > 0).astype(np.uint8) * 110
             overlay_fit = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
-            p.drawImage(0, 0, overlay_fit)
-        if self._pos is not None:
-            r = max(1, self.brush_size // 2)
+            p.drawImage(full, overlay_fit)
+        if self._pos_w is not None:
+            r = self._brush_px()
             p.setPen(QPen(QColor(255, 255, 255), 1))
             p.setBrush(Qt.NoBrush)
-            p.drawEllipse(QPointF(*self._pos), r, r)
+            p.drawEllipse(QPointF(*self._pos_w), r, r)
         p.end()
