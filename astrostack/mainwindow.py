@@ -647,6 +647,26 @@ class MainWindow(QMainWindow):
         )
         row_lp3.addWidget(self.spin_lp_feather)
         lay_lp.addLayout(row_lp3)
+        # v1.1.3 : cible du fond et forme commune (défauts : médiane + forme commune)
+        row_lp4 = QHBoxLayout()
+        row_lp4.setContentsMargins(0, 0, 0, 0)
+        row_lp4.addWidget(QLabel("Cible"))
+        self.combo_lp_target = QComboBox()
+        self.combo_lp_target.addItems(["Médiane (défaut)", "Ciel sombre"])
+        self.combo_lp_target.setToolTip(
+            "Médiane : le niveau médian du ciel est conservé (le ciel sombre est éclairci au même niveau). "
+            "Ciel sombre : seule la pollution est retirée, le ciel le plus sombre reste tel quel "
+            "(les zones très éclairées sont plus assombries)."
+        )
+        row_lp4.addWidget(self.combo_lp_target, 1)
+        lay_lp.addLayout(row_lp4)
+        self.chk_lp_shared = QCheckBox("Forme commune (anti-dominante)")
+        self.chk_lp_shared.setChecked(True)
+        self.chk_lp_shared.setToolTip(
+            "Ajuste une seule forme de gradient pour les trois couleurs, avec une amplitude par canal. "
+            "Évite la dominante bleue sous les nuages chauds. Décochez pour un gradient indépendant par canal."
+        )
+        lay_lp.addWidget(self.chk_lp_shared)
         self.btn_lp_redo = QPushButton("Réappliquer la PL sur le dernier stack")
         self.btn_lp_redo.setEnabled(False)
         self.btn_lp_redo.setToolTip(
@@ -1096,6 +1116,8 @@ class MainWindow(QMainWindow):
             lp_strength=self.spin_lp.value() / 100.0,
             lp_top_gradient=self.chk_top_sky.isChecked(),  # v1.1.3 : même gradient « haut = ciel » pour la PL
             lp_top_boost=self.spin_top_boost.value(),
+            lp_target="dark" if self.combo_lp_target.currentIndex() == 1 else "median",  # v1.1.3
+            lp_shared_shape=self.chk_lp_shared.isChecked(),  # v1.1.3
             lp_feather=self._lp_feather_value(),  # v0.8.15 : fondu PL réglable en UI (« auto » par défaut)
             stack_grow=self.spin_stack_grow.value(),  # v1.1.2 : marge d'empilement (px)
             meta_out=self._meta,   # v0.8.4 : sky/fg_w/stack_raw pour réappliquer la PL
@@ -1176,6 +1198,8 @@ class MainWindow(QMainWindow):
             if self.chk_lp.isChecked():
                 out = correct_light_pollution(
                     img, sky, strength=strength, feather=feather_v, debug_cb=self._log,
+                    shared_shape=self.chk_lp_shared.isChecked(),
+                    target="dark" if self.combo_lp_target.currentIndex() == 1 else "median",
                 )
             else:
                 out = img  # case PL décochée : on sauvegarde le stack tel quel

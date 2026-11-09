@@ -190,6 +190,7 @@ def correct_light_pollution(
     deg: int = 3,
     neutral: bool = True,
     shared_shape: bool = True,  # v1.1.3 : forme commune par défaut (évite la dominante bleue sous les nuages chauds)
+    target: str = "median",  # v1.1.3 : "median" (défaut, niveau médian conservé) ou "dark" (ciel le plus sombre conservé)
     return_background: bool = False,
     debug_cb=None,
 ):
@@ -220,7 +221,12 @@ def correct_light_pollution(
     # médianes sont ramenées à une même valeur : la dominante de couleur du ciel disparaît (fond neutre).
     med_img = np.array([float(np.median(img[..., c][sky_full])) for c in range(img.shape[2])])
     med_bg = np.array([float(np.median(bg[..., c][sky_full])) for c in range(img.shape[2])])
-    if neutral:
+    if target == "dark":
+        # v1.1.3 : cible = bas de la distribution du fond (2e percentile) : seule la pollution est
+        # retirée, le ciel le plus sombre reste tel quel. Les zones très éclairées sont plus assombries.
+        dark_ref = np.array([float(np.percentile(bg[..., c][sky_full], 2)) for c in range(img.shape[2])])
+        targets = np.full_like(dark_ref, dark_ref.mean()) if neutral else dark_ref
+    elif neutral:
         level_ref = float(med_img.mean())
         targets = level_ref - med_img + med_bg
     else:

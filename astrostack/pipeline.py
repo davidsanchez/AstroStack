@@ -61,6 +61,8 @@ def run_pipeline(
     lp_feather: float | None = None,
     lp_top_gradient: bool = True,
     lp_top_boost: float = 0.5,
+    lp_target: str = "median",
+    lp_shared_shape: bool = True,
     meta_out: dict | None = None,
     progress_cb=None,
     should_cancel=None,
@@ -271,6 +273,7 @@ def run_pipeline(
         result, lp_bg = correct_light_pollution(
             result, sky_lp, strength=lp_strength, feather=lp_feather,
             return_background=True, debug_cb=lambda m: cb(3, 0, 1, m),
+            shared_shape=lp_shared_shape, target=lp_target,
         )
         cb(3, 1, 1, "Correction de la pollution lumineuse terminée.")
 
