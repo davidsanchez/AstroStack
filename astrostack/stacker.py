@@ -31,6 +31,51 @@ def feather(mask_u8: np.ndarray, sigma: float) -> np.ndarray:
     return cv2.GaussianBlur(m, (k, k), sigma)
 
 
+ROBUST_MAX_BYTES = 1_500_000_000  # buffer des poses warpées (float32) ; au-delà : rejet en streaming
+
+
+def _stack_robust(get_frame, transforms, fg_w, size, kappa, cb):
+    """Empilement ciel par rejet centré sur la MÉDIANE (écart absolu médian robuste, MAD),
+    puis moyenne des valeurs conservées. Même moyenne que l'ancien rejet (bon bruit), sans
+    que les pixels aberrants (parallaxe du sol, arbre) faussent le centre ni l'écart."""
+    h, w = fg_w.shape
+    n = len(transforms)
+    sky2 = (1.0 - fg_w) > 0.5
+    buf = np.empty((n, h, w, 3), np.float32)
+    val = np.zeros((n, h, w), bool)
+    fg_acc = np.zeros((h, w, 3), np.float32)
+    fg_cnt = np.zeros((h, w, 1), np.float32)
+    fg3 = fg_w[..., None]
+    for i in range(n):
+        img = get_frame(i).astype(np.float32)
+        if img.shape[:2] != (h, w):
+            raise ValueError(f"Image {i} : taille {img.shape[:2]} différente de la référence {(h, w)}.")
+        wimg, v = warp_to_ref_valid(img, transforms[i], size)
+        buf[i] = wimg
+        val[i] = (v > 0.5) & sky2
+        fg_acc += img * fg3  # avant-plan : moyenne des poses non warpées (comme avant)
+        fg_cnt += fg3
+        cb(2, i, f"Statistiques ciel {i + 1}/{n}")
+    fg_img = np.where(fg_cnt > 0, fg_acc / np.maximum(fg_cnt, 1e-6), 0.0)
+
+    sky_img = np.zeros((h, w, 3), np.float32)
+    import warnings
+
+    for c in range(3):  # par canal pour limiter la mémoire des tableaux temporaires
+        X = np.where(val, buf[..., c], np.nan)
+        with warnings.catch_warnings():  # pixels sans aucune pose valide : traités plus bas
+            warnings.simplefilter("ignore", RuntimeWarning)
+            med = np.nanmedian(X, axis=0)
+            mad = np.nanmedian(np.abs(X - med), axis=0) * 1.4826 + 1e-3
+        ok = val & (np.abs(buf[..., c] - med) <= kappa * mad)
+        k = ok.sum(0)
+        mean_ok = (buf[..., c] * ok).sum(0) / np.maximum(k, 1)
+        has = np.isfinite(med)
+        sky_img[..., c] = np.where(k > 0, mean_ok, np.where(has, med, buf[0][..., c]))
+        cb(3, c, f"Rejet robuste du ciel — canal {c + 1}/3")
+    return sky_img * (1.0 - fg3) + fg_img * fg3
+
+
 def stack_frames(
     get_frame,
     transforms: list,
@@ -56,6 +101,12 @@ def stack_frames(
     def cb(stage, i, msg):
         if progress_cb:
             progress_cb(stage, i, n, msg)
+
+    # v0.9.1 : rejet robuste (médiane + MAD) quand toutes les poses tiennent en mémoire.
+    # Le rejet par moyenne/écart-type est gonflé par la pose aberrante elle-même (un arbre
+    # sombre parallaxé apparaît en fantôme) ; centrer sur la médiane le corrige.
+    if mode == "sigma" and n * h * w * 3 * 4 <= ROBUST_MAX_BYTES:
+        return _stack_robust(get_frame, transforms, fg_w, size, kappa, cb)
 
     # --- passe 1 : statistiques dans le ciel (avec poids de validité) + avant-plan ---
     acc = np.zeros((h, w, 3), np.float32)
