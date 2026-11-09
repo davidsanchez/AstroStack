@@ -1,0 +1,8 @@
+numpy>=1.26
+opencv-python-headless>=4.9
+rawpy>=0.22          # lecture des RAW (CR2, CR3, DNG, NEF, ARW, ...) via LibRaw
+PySide6>=6.6         # interface graphique Qt, macOS + Windows
+tifffile>=2024.2.2   # export TIFF 16 bits
+imageio>=2.34        # lecture PNG/TIFF standard + aperçus
+# Optionnel, pour le "Masque ML (ONNX)" (bouton dédié dans l'UI, --auto-mask ml en CLI) :
+# onnxruntime>=1.17

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astrostack"
+version = "0.8.18"
+description = "Empilement de paysages de nuit (star stacking) : alignement des étoiles, avant-plan fixe peint au pinceau, darks/flats, lecture RAW — macOS & Windows"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
+    "rawpy>=0.22",
+    "PySide6>=6.6",
+    "tifffile>=2024.2.2",
+    "imageio>=2.34",
+]
+
+[project.optional-dependencies]
+ml = ["onnxruntime>=1.17"]  # masque ML (ONNX) — bouton "Masque ML" / --auto-mask ml
+
+[project.scripts]
+astrostack-cli = "astrostack.cli:main"
+
+[project.gui-scripts]
+astrostack = "astrostack.mainwindow:main"
+
+[tool.setuptools.packages.find]
+include = ["astrostack*"]
