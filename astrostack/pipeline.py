@@ -249,7 +249,9 @@ def run_pipeline(
         cb(3, 0, 1, f"Correction de la pollution lumineuse — force {lp_strength:.0%}, ciel détecté par le masque automatique…")
         try:
             # v1.1.3 : le masque PL reprend le réglage « Gradient Ciel favorisé » de l'interface
-            sky_lp = auto_sky_weight(result, out_hw=wh, debug_cb=lambda m: cb(3, 0, 1, m),
+            # v1.1.6 : le masque PL est calculé sur la RÉFÉRENCE (comme le masque affiché), pas sur le stack :
+            # l'affinage luminance (seuil Otsu) donnait sinon des îlots sombres dans le ciel du stack.
+            sky_lp = auto_sky_weight(ref, out_hw=wh, debug_cb=lambda m: cb(3, 0, 1, m),
                                      top_gradient=lp_top_gradient, top_boost=lp_top_boost,
                                      lum_refine=lp_lum_refine, lum_thr=lp_lum_thr, edge_band=lp_edge_band)
             # le ciel défini par l'utilisateur (avant-plan peint) prime sur le modèle
