@@ -505,6 +505,23 @@ class MainWindow(QMainWindow):
             "en ciel. Décochez pour garder le masque ONNX seul."
         )
         lay_mask.addWidget(self.chk_lum_refine)
+        # v1.1.2 : marge de recalage autour de l'avant-plan, UNIQUEMENT pour l'empilement
+        # (pas affichée, pas exportée, pas utilisée par la PL). Augmenter pour les fantômes d'arbres.
+        row_grow = QHBoxLayout()
+        row_grow.setContentsMargins(0, 0, 0, 0)
+        row_grow.addWidget(QLabel("Marge empilement (px)"))
+        self.spin_stack_grow = QSpinBox()
+        self.spin_stack_grow.setRange(0, 10)
+        self.spin_stack_grow.setValue(2)
+        self.spin_stack_grow.setMaximumWidth(56)
+        self.spin_stack_grow.setToolTip(
+            "Élargit l'avant-plan de N px pour le SEUL empilement : le ciel n'est pas recalé "
+            "sur les bords des arbres et des objets fixes (fantômes). Ne change pas le masque "
+            "affiché ni la correction de pollution lumineuse. Défaut 2 px."
+        )
+        row_grow.addWidget(self.spin_stack_grow)
+        row_grow.addStretch(1)
+        lay_mask.addLayout(row_grow)
         row_lum = QHBoxLayout()  # v0.8.14 : UNE seule ligne compacte (3 petits spins) pour ne pas faire grossir le panneau
         row_lum.setContentsMargins(0, 0, 0, 0)  # v0.8.16 : pas de marge -> tient dans 340 px sans barre horizontale
         row_lum.setSpacing(2)
@@ -1078,6 +1095,7 @@ class MainWindow(QMainWindow):
             lp_correct=self.chk_lp.isChecked(),
             lp_strength=self.spin_lp.value() / 100.0,
             lp_feather=self._lp_feather_value(),  # v0.8.15 : fondu PL réglable en UI (« auto » par défaut)
+            stack_grow=self.spin_stack_grow.value(),  # v1.1.2 : marge d'empilement (px)
             meta_out=self._meta,   # v0.8.4 : sky/fg_w/stack_raw pour réappliquer la PL
         )
         self.btn_run.setEnabled(False)

@@ -56,6 +56,13 @@ def main(argv=None) -> None:
         "sur la luminance pleine résolution (détails fins : branches) ; 0 = désactivé (défaut 40)",
     )
     p.add_argument(
+        "--stack-grow",
+        type=int,
+        default=2,
+        help="v1.1.2 : marge d'empilement en px (défaut 2) — élargit l'avant-plan pour le seul "
+        "empilement, contre les fantômes autour des arbres ; ni affichée, ni utilisée par la PL",
+    )
+    p.add_argument(
         "--mask-max-side",
         type=int,
         default=2000,
@@ -191,6 +198,7 @@ def main(argv=None) -> None:
         lp_correct=args.lp_correct,
         lp_strength=args.lp_strength,
         lp_feather=args.lp_feather,
+        stack_grow=args.stack_grow,
         progress_cb=cb,
     )
     print("Terminé :", args.out)
