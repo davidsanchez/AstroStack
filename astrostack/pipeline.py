@@ -53,7 +53,7 @@ def run_pipeline(
     kappa: float = 2.5,
     refine_ecc: bool = True,
     refine_local: bool = True,
-    stack_grow: int = 2,
+    stack_grow: int = 5,
     ref_index: int = 0,
     out_path: str | None = None,
     lp_correct: bool = False,

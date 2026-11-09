@@ -512,12 +512,12 @@ class MainWindow(QMainWindow):
         row_grow.addWidget(QLabel("Marge empilement (px)"))
         self.spin_stack_grow = QSpinBox()
         self.spin_stack_grow.setRange(0, 10)
-        self.spin_stack_grow.setValue(2)
+        self.spin_stack_grow.setValue(5)
         self.spin_stack_grow.setMaximumWidth(56)
         self.spin_stack_grow.setToolTip(
             "Élargit l'avant-plan de N px pour le SEUL empilement : le ciel n'est pas recalé "
             "sur les bords des arbres et des objets fixes (fantômes). Ne change pas le masque "
-            "affiché ni la correction de pollution lumineuse. Défaut 2 px."
+            "affiché ni la correction de pollution lumineuse. Défaut 5 px."
         )
         row_grow.addWidget(self.spin_stack_grow)
         row_grow.addStretch(1)

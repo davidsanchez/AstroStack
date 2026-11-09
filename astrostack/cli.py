@@ -58,8 +58,8 @@ def main(argv=None) -> None:
     p.add_argument(
         "--stack-grow",
         type=int,
-        default=2,
-        help="v1.1.2 : marge d'empilement en px (défaut 2) — élargit l'avant-plan pour le seul "
+        default=5,
+        help="v1.1.2 : marge d'empilement en px (défaut 5) — élargit l'avant-plan pour le seul "
         "empilement, contre les fantômes autour des arbres ; ni affichée, ni utilisée par la PL",
     )
     p.add_argument(
