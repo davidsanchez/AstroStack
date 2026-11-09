@@ -44,6 +44,20 @@ def auto_sky_weight(img_linear: np.ndarray, out_hw: tuple[int, int] | None = Non
     return (1.0 - fg.astype(np.float32) / 255.0).astype(np.float32)
 
 
+def exclude_dark_border(sky: np.ndarray, img: np.ndarray, level: float, margin: int = 3) -> np.ndarray:
+    """Retire du ciel PL les zones noires (bords de recalage, sans donnée) et leur voisinage.
+
+    Une bande quasi nulle sur les trois canaux n'est pas du ciel : elle tirerait le fond polynomial
+    vers le bas (et éclaircirait les coins). On la retire, plus une marge de `margin` px.
+    """
+    im = img if img.ndim == 3 else img[..., None]
+    black = (im.max(axis=2) <= 0.001 * level).astype(np.uint8)
+    if not black.any():
+        return sky
+    black = cv2.dilate(black, np.ones((3, 3), np.uint8), iterations=int(margin))
+    return (np.asarray(sky, dtype=np.float32) * (1.0 - black.astype(np.float32))).astype(np.float32)
+
+
 def combine_painted_sky(sky: np.ndarray, painted_fg: np.ndarray | None) -> np.ndarray:
     """Ciel final pour la PL : le masque automatique, AMPUTÉ de l'avant-plan peint par l'utilisateur.
 
@@ -186,6 +200,7 @@ def correct_light_pollution(
     img = img.astype(np.float32)
     level = 65535.0 if float(img.max()) > 1.5 else 1.0
     strength = float(np.clip(strength, 0.0, LP_MAX_STRENGTH))
+    sky = exclude_dark_border(sky, img, level)  # bords noirs : jamais pris pour du ciel
     sky_full = sky >= 0.5
     if not sky_full.any():
         if debug_cb:

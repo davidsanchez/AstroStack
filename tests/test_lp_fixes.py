@@ -41,4 +41,22 @@ def test_painted_foreground_removed_from_pl_sky():
 if __name__ == "__main__":
     test_background_bounded_to_sky_range_in_corner()
     test_painted_foreground_removed_from_pl_sky()
+    test_black_border_ignored_by_pl()
     print("OK")
+
+
+def test_black_border_ignored_by_pl():
+    """Une bande noire (bord de recalage) ne doit ni tirer le fond vers le bas, ni être corrigée."""
+    from astrostack.lpcorrect import correct_light_pollution
+    H, W = 300, 400
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    lum = 20000 + 3000 * (1 - yy / H)
+    clean_img = np.stack([lum] * 3, -1).astype(np.float32)
+    bordered = clean_img.copy()
+    bordered[:, :15] = 0.0
+    sky = np.ones((H, W), np.float32)
+    a = correct_light_pollution(clean_img, sky, strength=1.0, feather=0)
+    b = correct_light_pollution(bordered, sky, strength=1.0, feather=0)
+    ok = slice(None), slice(40, None)
+    assert np.abs(a[ok] - b[ok]).max() < 0.01 * 65535, "la bande noire a changé la correction du ciel"
+    assert np.abs(b[:, :15]).max() < 1e-3, "la bande noire ne doit pas être modifiée"
