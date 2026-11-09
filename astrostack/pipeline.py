@@ -57,11 +57,8 @@ def run_pipeline(
     ref_index: int = 0,
     out_path: str | None = None,
     lp_correct: bool = False,
-    lp_method: str = "synthetic",
     lp_strength: float = 1.0,
-    lp_sky_only: bool = True,
     lp_feather: float | None = None,
-    lp_mask_source: str = "painted",
     meta_out: dict | None = None,
     progress_cb=None,
     should_cancel=None,
@@ -85,16 +82,9 @@ def run_pipeline(
     out_path    : si fourni, écrit le TIFF 16 bits + un aperçu PNG + le masque PNG.
     lp_correct  : correction de la pollution lumineuse (v0.8.0), EN LINÉAIRE, après
                   l'empilement et avant l'export : soustraction d'un fond estimé.
-    lp_method   : "synthetic" (défaut : fond lissé « synthetic flat » estimé sur le ciel)
-                  ou "graxpert" (modèle ONNX GraXpert, nécessite onnxruntime).
     lp_strength : force 0..1 (défaut 1.0 = correction complète).
-    lp_sky_only : si True, la correction n'est appliquée que sur le ciel (masque avant-plan).
     lp_feather  : sigma (px) du lissage de la transition au bord du masque ciel — v0.8.2,
                   None = auto (min(h,l)/96, anti-halos), 0 = masque dur.
-    lp_mask_source : masque utilisé POUR LA CORRECTION PL (v0.8.5) : "painted" (masque peint
-                  de l'UI) ou "ml" (masque ONNX depuis la référence). v0.8.7 : en mode "ml",
-                  le masque ONNX est utilisé BRUT — sans dilatation (+2 px) ni dégradé
-                  vertical, réservés au masque d'empilement.
     meta_out    : dict optionnel rempli avec les données du stack (v0.8.4) : "stack_raw"
                   (résultat AVANT correction PL), "sky"/"fg_w" (poids à la résolution de
                   travail), "work_shape" — permet de réappliquer la correction PL sans
@@ -238,67 +228,40 @@ def run_pipeline(
         meta_out["work_shape"] = wh
 
     # --- correction de la pollution lumineuse (linéaire, post-empilement) ---
+    # v1.0.0 : le ciel vient du MASQUE AUTOMATIQUE calculé sur le stack (géométrie de référence).
     lp_bg = None
     if lp_correct:
         if should_cancel is not None and should_cancel():
             raise CancelledError("Annulation demandée par l'utilisateur.")
-        from .lpcorrect import correct_light_pollution
+        from .lpcorrect import auto_sky_weight, correct_light_pollution
 
-        cb(3, 0, 1, f"Correction de la pollution lumineuse — méthode « {lp_method} », force {lp_strength:.0%}…")
-        if lp_method == "graxpert" and lp_sky_only:
-            lp_sky_only = False  # v0.8.10 : GraXpert corrige TOUTE l'image (le modèle protège l'avant-plan, y compris la lueur d'horizon)
-            cb(3, 0, 1, "Méthode GraXpert : correction appliquée à TOUTE l'image (« ciel uniquement » ignoré).")
-        sky_lp = sky
-        if lp_mask_source == "ml":  # v0.8.5 : masque PL = masque ONNX (depuis la référence)
-            from .mlmask import foreground_mask_from_linear
-
-            fg_ml = foreground_mask_from_linear(
-                ref, debug_cb=lambda m: cb(3, 0, 1, m),
-                top_gradient=False, top_boost=0.5, grow=0,  # v0.8.7 : pas de dilatation ni de dégradé pour la PL
-                guided=False, smooth=1, proba_blur=0, morph=False,          # v0.8.9 + v0.9.0 : pas de filtre guidé (PL inchangée) : masque ONNX 100 % BRUT (aucun lissage ni morphologie)
-            )
-            m_ml = cv2.resize(fg_ml, (wh[1], wh[0]), interpolation=cv2.INTER_NEAREST)
-            sky_lp = 1.0 - feather(m_ml, sigma=max(2.0, min(wh) * 0.004))
-            cb(3, 0, 1, "Masque PL : masque ML ONNX brut (seuil 0,5, sans lissage ni dilatation).")
+        cb(3, 0, 1, f"Correction de la pollution lumineuse — force {lp_strength:.0%}, ciel détecté par le masque automatique…")
+        try:
+            sky_lp = auto_sky_weight(result, out_hw=wh, debug_cb=lambda m: cb(3, 0, 1, m))
+        except ImportError as exc:
+            raise RuntimeError("La détection du ciel a besoin de onnxruntime : pip install onnxruntime") from exc
         if meta_out is not None:
             meta_out["sky_lp"] = sky_lp
             meta_out["ref_path"] = lights[ref_index]
-        if out_path:  # v0.8.9 : sauvegarde du masque PL réellement utilisé (diagnostic : la lueur d'horizon y est-elle classée ciel ?)
-            try:
+        if out_path:
+            base, ext = os.path.splitext(out_path)
+            try:  # diagnostic : masque ciel utilisé
                 import imageio.v3 as iio
 
-                base0, _ = os.path.splitext(out_path)
-                iio.imwrite(base0 + "_maskPL.png", (np.clip(sky_lp, 0.0, 1.0) * 255.0).round().astype(np.uint8))
-                cb(3, 0, 1, f"Masque PL écrit : {base0}_maskPL.png — ciel = {float((sky_lp > 0.5).mean()):.0%} de l'image")
+                iio.imwrite(base + "_maskPL.png", (np.clip(sky_lp, 0.0, 1.0) * 255.0).round().astype(np.uint8))
+                cb(3, 0, 1, f"Masque PL écrit : {base}_maskPL.png — ciel = {float((sky_lp > 0.5).mean()):.0%} de l'image")
             except Exception:
                 pass
-        if out_path:  # v0.8.4 : image AVANT correction PL ; v0.8.8 : une seule fois (si déjà là, on la conserve)
-            base, ext = os.path.splitext(out_path)
-            pre_path = base + "_avant_PL" + (ext or ".tif")
+            pre_path = base + "_avant_PL" + (ext or ".tif")  # image AVANT correction (une seule fois)
             if not os.path.exists(pre_path):
                 _save_result(pre_path, result, fg_w)
                 cb(3, 0, 1, f"Image AVANT correction PL écrite : {pre_path}")
             else:
                 cb(3, 0, 1, f"Image AVANT correction PL déjà existante, conservée : {pre_path}")
-        try:
-            lp_ret = correct_light_pollution(
-                result,
-                method=lp_method,
-                strength=lp_strength,
-                sky=sky_lp,
-                sky_only=lp_sky_only,
-                feather=lp_feather,
-                debug_cb=lambda m: cb(3, 0, 1, m),
-                return_background=bool(out_path),  # v0.9.3 : fond estimé exporté pour contrôle visuel
-            )
-            if isinstance(lp_ret, tuple):
-                result, lp_bg = lp_ret
-            else:
-                result, lp_bg = lp_ret, None
-        except ImportError as exc:
-            raise RuntimeError(
-                "La méthode ML GraXpert a besoin de onnxruntime : pip install onnxruntime"
-            ) from exc
+        result, lp_bg = correct_light_pollution(
+            result, sky_lp, strength=lp_strength, feather=lp_feather,
+            return_background=True, debug_cb=lambda m: cb(3, 0, 1, m),
+        )
         cb(3, 1, 1, "Correction de la pollution lumineuse terminée.")
 
     if out_path:

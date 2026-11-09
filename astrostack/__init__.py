@@ -3,4 +3,4 @@
 Cross-platform (macOS / Windows), lecture RAW (CR2, CR3, DNG, NEF, ARW, ...) via rawpy/LibRaw.
 """
 
-__version__ = "0.9.3"
+__version__ = "1.0.0"

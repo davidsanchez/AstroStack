@@ -38,7 +38,7 @@ def test_lp_synthetic_flat():
     sky = np.zeros((H, W), np.float32)
     sky[:FG_TOP] = 1.0  # ciel = haut de l'image, avant-plan = bas
 
-    out = correct_light_pollution(img, method="synthetic", strength=1.0, sky=sky, sky_only=True)
+    out = correct_light_pollution(img, sky, strength=1.0)
 
     g_in = float(img[:FG_TOP, -1].mean() - img[:FG_TOP, 0].mean())
     g_out = float(out[:FG_TOP, -1].mean() - out[:FG_TOP, 0].mean())
