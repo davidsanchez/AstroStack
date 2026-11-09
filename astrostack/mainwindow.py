@@ -1131,8 +1131,12 @@ class MainWindow(QMainWindow):
         from .lpcorrect import auto_sky_weight
 
         # v1.0.0 : ciel = masque automatique calculé sur le stack (même source que le pipeline)
+        from .lpcorrect import combine_painted_sky
+
         sky = auto_sky_weight(img, debug_cb=self._log)
         fg_w = self._meta.get("fg_w")
+        # le ciel défini par l'utilisateur (avant-plan peint) prime sur le modèle
+        sky = combine_painted_sky(sky, fg_w)
         strength = self.spin_lp.value() / 100.0
         feather_v = self._lp_feather_value()
         out_path = self._unique_out()

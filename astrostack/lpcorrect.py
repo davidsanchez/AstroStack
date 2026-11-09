@@ -44,6 +44,26 @@ def auto_sky_weight(img_linear: np.ndarray, out_hw: tuple[int, int] | None = Non
     return (1.0 - fg.astype(np.float32) / 255.0).astype(np.float32)
 
 
+def combine_painted_sky(sky: np.ndarray, painted_fg: np.ndarray | None) -> np.ndarray:
+    """Ciel final pour la PL : le masque automatique, AMPUTÉ de l'avant-plan peint par l'utilisateur.
+
+    painted_fg : masque d'avant-plan peint (fg_w, 1 = avant-plan), même si sa taille diffère (redimensionné).
+    Ce qui est peint en avant-plan n'est jamais considéré comme ciel, même si le modèle ML le croit.
+    Le masque peint utilisé est celui affiché (sans la marge d'empilement de 2 px).
+    """
+    sky = np.asarray(sky, dtype=np.float32)
+    if painted_fg is None:
+        return sky
+    p = np.asarray(painted_fg, dtype=np.float32)
+    if p.ndim == 3:
+        p = p[..., 0]
+    if p.max() > 1.5:
+        p = p / 255.0
+    if p.shape[:2] != sky.shape[:2]:
+        p = cv2.resize(p, (sky.shape[1], sky.shape[0]), interpolation=cv2.INTER_LINEAR)
+    return np.clip(sky * (1.0 - np.clip(p, 0.0, 1.0)), 0.0, 1.0).astype(np.float32)
+
+
 def _poly_basis(h: int, w: int, deg: int) -> np.ndarray:
     """Base polynomiale 2D (coordonnées normalisées -1..1), forme (h*w, K)."""
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
@@ -105,6 +125,13 @@ def estimate_background(img: np.ndarray, sky_w: np.ndarray, deg: int = 3, max_sm
         for c in range(small.shape[2]):
             cs = _robust_lstsq(B[idx], small[..., c].ravel()[idx])
             bg_small[..., c] = (B @ cs).reshape(sh, sw)
+    # Le polynôme s'extrapole mal là où il n'y a pas de ciel (coins, sol) : il peut descendre ou
+    # monter bien au-delà des niveaux réellement observés. On borne le fond à la plage des
+    # échantillons de ciel, canal par canal, pour qu'aucun coin ne s'éclaircisse artificiellement.
+    for c in range(small.shape[2]):
+        vals = small[..., c].ravel()[idx]
+        lo, hi = float(vals.min()), float(vals.max())
+        bg_small[..., c] = np.clip(bg_small[..., c], lo, hi)
     bg = cv2.resize(bg_small, (w, h), interpolation=cv2.INTER_LINEAR)
     if bg.ndim == 2:
         bg = bg[..., None]

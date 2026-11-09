@@ -238,6 +238,9 @@ def run_pipeline(
         cb(3, 0, 1, f"Correction de la pollution lumineuse — force {lp_strength:.0%}, ciel détecté par le masque automatique…")
         try:
             sky_lp = auto_sky_weight(result, out_hw=wh, debug_cb=lambda m: cb(3, 0, 1, m))
+            # le ciel défini par l'utilisateur (avant-plan peint) prime sur le modèle
+            from .lpcorrect import combine_painted_sky
+            sky_lp = combine_painted_sky(sky_lp, fg_w if mask is not None else None)
         except ImportError as exc:
             raise RuntimeError("La détection du ciel a besoin de onnxruntime : pip install onnxruntime") from exc
         if meta_out is not None:
