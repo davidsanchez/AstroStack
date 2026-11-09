@@ -56,6 +56,13 @@ def main(argv=None) -> None:
         "sur la luminance pleine résolution (détails fins : branches) ; 0 = désactivé (défaut 40)",
     )
     p.add_argument(
+        "--stack-grow",
+        type=int,
+        default=5,
+        help="v1.1.2 : marge d'empilement en px (défaut 5) — élargit l'avant-plan pour le seul "
+        "empilement, contre les fantômes autour des arbres ; ni affichée, ni utilisée par la PL",
+    )
+    p.add_argument(
         "--mask-max-side",
         type=int,
         default=2000,
@@ -88,24 +95,10 @@ def main(argv=None) -> None:
     p.add_argument(
         "--lp-correct",
         action="store_true",
-        help="correction de la pollution lumineuse (v0.8.0) : en linéaire, après l'empilement, "
-        "soustraction d'un fond de ciel estimé",
-    )
-    p.add_argument(
-        "--lp-method",
-        choices=["synthetic", "graxpert"],
-        default="synthetic",
-        help="méthode de correction PL : 'synthetic' (défaut, fond lissé sur le ciel) ou "
-        "'graxpert' (modèle ONNX ~218 Mo, licence CC BY-NC-SA non commercial, nécessite onnxruntime)",
+        help="correction de la pollution lumineuse : fond de ciel estimé sur le ciel détecté par le "
+        "masque automatique (ONNX), soustrait en linéaire après l'empilement",
     )
     p.add_argument("--lp-strength", type=float, default=1.0, help="force de la correction PL, 0..1 (défaut 1.0)")
-    p.add_argument(
-        "--no-lp-sky-only",
-        action="store_true",
-        help="applique la correction PL sur TOUTE l'image (défaut : ciel uniquement, selon le masque). "
-        "Note v0.8.10 : avec --lp-method graxpert, la correction s'applique de toute façon à toute l'image "
-        "(le modèle protège l'avant-plan), donc la lueur d'horizon est corrigée même avec un masque ;",
-    )
     p.add_argument(
         "--lp-feather",
         type=float,
@@ -114,19 +107,11 @@ def main(argv=None) -> None:
         "(défaut auto = min(h,l)/96, anti-halos ; 0 = masque dur)",
     )
     p.add_argument(
-        "--lp-mask",
-        choices=["painted", "ml"],
-        default="painted",
-        help="v0.8.5 : masque utilisé POUR la correction PL : 'painted' (masque fourni/peint) "
-        "ou 'ml' (masque ONNX depuis la référence, utilisé BRUT en v0.8.7 : sans dilatation "
-        "ni dégradé ; nécessite onnxruntime)",
-    )
-    p.add_argument(
         "--lp-redo",
         metavar="TIFF",
         help="v0.8.4 : réapplique UNIQUEMENT la correction PL sur un TIFF déjà empilé "
         "(ex. astrostack_result.tif), sans re-stacker : écrit <base>_pl.tif + aperçu. "
-        "Le masque voisin <base>_mask.png est utilisé pour le mode « ciel uniquement ».",
+        "Le ciel est détecté automatiquement sur ce TIFF (masque automatique).",
     )
     args = p.parse_args(argv)
 
@@ -136,7 +121,7 @@ def main(argv=None) -> None:
         import imageio.v3 as iio
         import tifffile
 
-        from .lpcorrect import correct_light_pollution
+        from .lpcorrect import auto_sky_weight, correct_light_pollution
         from .pipeline import _save_result
 
         src = args.lp_redo
@@ -144,37 +129,14 @@ def main(argv=None) -> None:
         if img.ndim == 2:
             img = np.stack([img] * 3, axis=-1)
         base, _ = os.path.splitext(src)
-        mask_path = base + "_mask.png"
-        sky = None
-        fg_w = np.zeros(img.shape[:2], np.float32)
-        if args.lp_mask == "ml":  # v0.8.5 : masque ONNX depuis le TIFF ; v0.8.7/0.8.9 : 100 % BRUT (ni dilatation, ni dégradé, ni lissage, ni morphologie)
-            from .mlmask import foreground_mask_from_linear
-
-            fg = foreground_mask_from_linear(img, debug_cb=lambda m: print("[ML]", m, flush=True),
-                                             top_gradient=False, grow=0, smooth=1, proba_blur=0, morph=False, guided=False)
-            fg_w = fg.astype(np.float32) / 255.0
-            sky = 1.0 - fg_w
-            print("Masque PL : ONNX brut (seuil 0,5) depuis le TIFF", flush=True)
-        elif os.path.exists(mask_path) and not args.no_lp_sky_only:
-            m = iio.imread(mask_path)
-            if m.ndim == 3:
-                m = m[..., 0]
-            fg_w = m.astype(np.float32) / 255.0
-            sky = 1.0 - fg_w
-            print(f"Masque voisin utilisé : {mask_path}", flush=True)
+        sky = auto_sky_weight(img, debug_cb=lambda m: print("[ML]", m, flush=True))
         out = correct_light_pollution(
-            img,
-            method=args.lp_method,
-            strength=args.lp_strength,
-            sky=sky,
-            sky_only=not args.no_lp_sky_only,
-            feather=args.lp_feather,
+            img, sky, strength=args.lp_strength, feather=args.lp_feather,
             debug_cb=lambda m: print("[PL]", m, flush=True),
         )
-        if sky is not None:  # v0.8.9 : masque PL utilisé, pour diagnostic
-            iio.imwrite(base + "_pl_maskPL.png", (np.clip(sky, 0.0, 1.0) * 255.0).round().astype(np.uint8))
-            print(f"Masque PL écrit : {base}_pl_maskPL.png — ciel = {float((sky > 0.5).mean()):.0%}", flush=True)
-        paths = _save_result(base + "_pl.tif", out, fg_w)
+        iio.imwrite(base + "_pl_maskPL.png", (np.clip(sky, 0.0, 1.0) * 255.0).round().astype(np.uint8))
+        print(f"Masque PL écrit : {base}_pl_maskPL.png — ciel = {float((sky > 0.5).mean()):.0%}", flush=True)
+        paths = _save_result(base + "_pl.tif", out, np.zeros(img.shape[:2], np.float32))
         print("Terminé :", paths, flush=True)
         return
 
@@ -234,11 +196,9 @@ def main(argv=None) -> None:
         ref_index=args.ref_index,
         out_path=args.out,
         lp_correct=args.lp_correct,
-        lp_method=args.lp_method,
         lp_strength=args.lp_strength,
-        lp_sky_only=not args.no_lp_sky_only,
         lp_feather=args.lp_feather,
-        lp_mask_source=args.lp_mask,
+        stack_grow=args.stack_grow,
         progress_cb=cb,
     )
     print("Terminé :", args.out)

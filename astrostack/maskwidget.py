@@ -21,6 +21,8 @@ class MaskEditor(QWidget):
         self.setMouseTracking(True)
         self._qimg: QImage | None = None
         self._mask: np.ndarray | None = None  # uint8 HxW, 255 = avant-plan peint
+        self._fit: np.ndarray | None = None   # v1.1.5 : uint8 HxW, 255 = zone exclue du CALCUL PL (nuages)
+        self.paint_fit = False                # True : le pinceau peint la zone d'exclusion PL
         self.brush_size = 40  # diamètre en pixels de l'aperçu
         self.erase = False
         self._pos: tuple[int, int] | None = None
@@ -30,6 +32,7 @@ class MaskEditor(QWidget):
     def set_image(self, qimg: QImage) -> None:
         self._qimg = qimg
         self._mask = np.zeros((qimg.height(), qimg.width()), dtype=np.uint8)
+        self._fit = np.zeros((qimg.height(), qimg.width()), dtype=np.uint8)
         self.setFixedSize(qimg.width(), qimg.height())
         self.update()
 
@@ -50,6 +53,17 @@ class MaskEditor(QWidget):
             m = cv2.resize(m, (self._qimg.width(), self._qimg.height()), interpolation=cv2.INTER_LINEAR)
         self._mask = m.astype(np.uint8)
         self.update()
+
+    def get_fit_mask(self) -> np.ndarray | None:
+        """Zone exclue du calcul PL (255 = exclue), ou None si rien n'est peint."""
+        if self._fit is None or not self._fit.any():
+            return None
+        return self._fit.copy()
+
+    def clear_fit_mask(self) -> None:
+        if self._fit is not None:
+            self._fit[:] = 0
+            self.update()
 
     def has_image(self) -> bool:
         return self._qimg is not None
@@ -99,10 +113,13 @@ class MaskEditor(QWidget):
         if pos is None or self._mask is None:
             return
         x, y = pos
+        target = self._fit if self.paint_fit else self._mask
+        if target is None:
+            return
         r = max(1, self.brush_size // 2)
-        yy, xx = np.ogrid[: self._mask.shape[0], : self._mask.shape[1]]
+        yy, xx = np.ogrid[: target.shape[0], : target.shape[1]]
         m = (xx - x) ** 2 + (yy - y) ** 2 <= r * r
-        self._mask[m] = 0 if self.erase else 255
+        target[m] = 0 if self.erase else 255
         self.update()
 
     def mousePressEvent(self, ev) -> None:
@@ -133,6 +150,15 @@ class MaskEditor(QWidget):
             rgba[..., 3] = (self._mask > 0).astype(np.uint8) * 110  # alpha
             overlay = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
             p.drawImage(0, 0, overlay)
+        if self._qimg is not None and self._fit is not None and self._fit.any():
+            h, w = self._fit.shape
+            rgba = np.zeros((h, w, 4), dtype=np.uint8)
+            rgba[..., 0] = 0
+            rgba[..., 1] = 140  # bleu : zone exclue du calcul PL seulement
+            rgba[..., 2] = 255
+            rgba[..., 3] = (self._fit > 0).astype(np.uint8) * 110
+            overlay_fit = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
+            p.drawImage(0, 0, overlay_fit)
         if self._pos is not None:
             r = max(1, self.brush_size // 2)
             p.setPen(QPen(QColor(255, 255, 255), 1))

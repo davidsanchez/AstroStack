@@ -505,6 +505,23 @@ class MainWindow(QMainWindow):
             "en ciel. Décochez pour garder le masque ONNX seul."
         )
         lay_mask.addWidget(self.chk_lum_refine)
+        # v1.1.2 : marge de recalage autour de l'avant-plan, UNIQUEMENT pour l'empilement
+        # (pas affichée, pas exportée, pas utilisée par la PL). Augmenter pour les fantômes d'arbres.
+        row_grow = QHBoxLayout()
+        row_grow.setContentsMargins(0, 0, 0, 0)
+        row_grow.addWidget(QLabel("Marge empilement (px)"))
+        self.spin_stack_grow = QSpinBox()
+        self.spin_stack_grow.setRange(0, 10)
+        self.spin_stack_grow.setValue(5)
+        self.spin_stack_grow.setMaximumWidth(56)
+        self.spin_stack_grow.setToolTip(
+            "Élargit l'avant-plan de N px pour le SEUL empilement : le ciel n'est pas recalé "
+            "sur les bords des arbres et des objets fixes (fantômes). Ne change pas le masque "
+            "affiché ni la correction de pollution lumineuse. Défaut 5 px."
+        )
+        row_grow.addWidget(self.spin_stack_grow)
+        row_grow.addStretch(1)
+        lay_mask.addLayout(row_grow)
         row_lum = QHBoxLayout()  # v0.8.14 : UNE seule ligne compacte (3 petits spins) pour ne pas faire grossir le panneau
         row_lum.setContentsMargins(0, 0, 0, 0)  # v0.8.16 : pas de marge -> tient dans 340 px sans barre horizontale
         row_lum.setSpacing(2)
@@ -599,50 +616,21 @@ class MainWindow(QMainWindow):
         lay_lp.setContentsMargins(2, 2, 2, 2)
         lay_lp.setSpacing(2)
         self.chk_lp = QCheckBox("Corriger la pollution lumineuse")
-        self.chk_lp.setToolTip("Post-empilement, en linéaire : soustrait le dégradé de fond de ciel (additif).")
+        self.chk_lp.setToolTip("Post-empilement, en linéaire : soustrait le gradient de fond de ciel. "
+                               "Le ciel est détecté par le masque automatique (ONNX) ; l'avant-plan n'est jamais modifié.")
         lay_lp.addWidget(self.chk_lp)
-        row_lp1 = QHBoxLayout()
-        row_lp1.addWidget(QLabel("Méthode"))
-        self.combo_lp = QComboBox()
-        self.combo_lp.setMinimumWidth(0)  # v0.8.17 : peut rétrécir -> tient dans 340 px
-        self.combo_lp.addItems(["Synthetic flat (défaut)", "ML GraXpert (ONNX)"])
-        self.combo_lp.setToolTip(
-            "Synthetic flat : fond lissé estimé sur le ciel (rapide, sans modèle). "
-            "ML GraXpert : modèle ONNX ~218 Mo (licence CC BY-NC-SA, usage non commercial), "
-            "téléchargé au premier usage dans ~/.astrostack/."
-        )
-        row_lp1.addWidget(self.combo_lp, 1)
-        lay_lp.addLayout(row_lp1)
         row_lp2 = QHBoxLayout()
         row_lp2.addWidget(QLabel("Force"))
         self.spin_lp = QSpinBox()
-        self.spin_lp.setRange(0, 150)   # v0.8.6 : jusqu'à 150 % (sur-correction du gradient résiduel)
+        self.spin_lp.setRange(0, 100)   # v0.9.3 : 100 % maximum (la sur-correction creusait des halos sombres)
         self.spin_lp.setValue(100)
         self.spin_lp.setSuffix(" %")
         self.spin_lp.setMaximumWidth(80)
-        self.spin_lp.setToolTip("Force de la correction PL : 100 % = correction complète, "
-                                "> 100 % = sur-correction (peut aider à tuer un halo résiduel), 0 % = off.")
+        self.spin_lp.setToolTip("Force de la correction PL : 100 % = correction complète (maximum), 0 % = off.")
         row_lp2.addWidget(self.spin_lp)
-        self.chk_lp_sky = QCheckBox("Ciel uniquement")
-        self.chk_lp_sky.setChecked(True)
-        self.chk_lp_sky.setToolTip("N'applique la correction que sur le ciel (masque avant-plan) : l'avant-plan reste intact. "
-                                  "La transition au bord du masque est lissée (anti-halos, v0.8.2). "
-                                  "Décochez pour corriger toute l'image (aucun artefact de masque).")
-        row_lp2.addWidget(self.chk_lp_sky)
         row_lp2.addStretch(1)
         lay_lp.addLayout(row_lp2)
         row_lp3 = QHBoxLayout()
-        row_lp3.addWidget(QLabel("Masque PL"))
-        self.combo_lp_mask = QComboBox()
-        self.combo_lp_mask.setMinimumWidth(0)  # v0.8.16 : peut rétrécir -> pas de barre horizontale dans le panneau 340 px
-        self.combo_lp_mask.addItems(["Peint (UI)", "ML ONNX (auto)"])
-        self.combo_lp_mask.setToolTip(
-            "Masque utilisé POUR la correction de la pollution lumineuse (v0.8.5) : "
-            "« Peint (UI) » = le masque peint dans l'éditeur ; « ML ONNX (auto) » = masque ONNX "
-            "régénéré depuis la référence, utilisé BRUT (v0.8.7 : sans dilatation +2 px ni dégradé "
-            "vertical — réservés au masque d'empilement ; nécessite onnxruntime)."
-        )
-        row_lp3.addWidget(self.combo_lp_mask, 1)
         row_lp3.addWidget(QLabel("Fondu"))
         self.spin_lp_feather = QDoubleSpinBox()
         self.spin_lp_feather.setRange(-1.0, 200.0)
@@ -659,13 +647,49 @@ class MainWindow(QMainWindow):
         )
         row_lp3.addWidget(self.spin_lp_feather)
         lay_lp.addLayout(row_lp3)
-        self.combo_lp.currentIndexChanged.connect(self._on_lp_method_changed)
-        self._on_lp_method_changed(self.combo_lp.currentIndex())
+        # v1.1.3 : cible du fond et forme commune (défauts : médiane + forme commune)
+        # v1.1.5 : zone à exclure du CALCUL de la PL (nuages), peinte en bleu. Décochée, le pinceau
+        # revient à l'avant-plan rouge (masque d'alignement). Ce n'est pas de l'avant-plan : la zone
+        # reste corrigée, elle ne sert qu'à estimer le fond.
+        row_fit = QHBoxLayout()
+        row_fit.setContentsMargins(0, 0, 0, 0)
+        self.chk_fit = QCheckBox("Peindre zone PL (bleu)")
+        self.chk_fit.setToolTip(
+            "Coché : le pinceau peint en BLEU une zone exclue du calcul de la PL (nuages lumineux). "
+            "Décoché : le pinceau revient à l'avant-plan rouge du masque d'alignement."
+        )
+        self.chk_fit.toggled.connect(lambda v: setattr(self.mask_editor, "paint_fit", bool(v)))
+        row_fit.addWidget(self.chk_fit)
+        row_fit.addStretch(1)
+        btn_reset_pl = QPushButton("Réinitialiser masque PL")
+        btn_reset_pl.setToolTip("Efface la zone bleue d'exclusion PL. Le masque d'alignement (rouge) n'est pas modifié.")
+        btn_reset_pl.clicked.connect(lambda: self.mask_editor.clear_fit_mask())
+        row_fit.addWidget(btn_reset_pl)
+        lay_lp.addLayout(row_fit)
+        row_lp4 = QHBoxLayout()
+        row_lp4.setContentsMargins(0, 0, 0, 0)
+        row_lp4.addWidget(QLabel("Cible"))
+        self.combo_lp_target = QComboBox()
+        self.combo_lp_target.addItems(["Médiane (défaut)", "Ciel sombre"])
+        self.combo_lp_target.setToolTip(
+            "Médiane : le niveau médian du ciel est conservé (le ciel sombre est éclairci au même niveau). "
+            "Ciel sombre : seule la pollution est retirée, le ciel le plus sombre reste tel quel "
+            "(les zones très éclairées sont plus assombries)."
+        )
+        row_lp4.addWidget(self.combo_lp_target, 1)
+        lay_lp.addLayout(row_lp4)
+        self.chk_lp_shared = QCheckBox("Forme commune (anti-dominante)")
+        self.chk_lp_shared.setChecked(True)
+        self.chk_lp_shared.setToolTip(
+            "Ajuste une seule forme de gradient pour les trois couleurs, avec une amplitude par canal. "
+            "Évite la dominante bleue sous les nuages chauds. Décochez pour un gradient indépendant par canal."
+        )
+        lay_lp.addWidget(self.chk_lp_shared)
         self.btn_lp_redo = QPushButton("Réappliquer la PL sur le dernier stack")
         self.btn_lp_redo.setEnabled(False)
         self.btn_lp_redo.setToolTip(
             "v0.8.4 : réapplique la correction de la pollution lumineuse avec les réglages "
-            "actuels (méthode / force / ciel uniquement) sur le DERNIER empilement terminé, "
+            "actuels (force / fondu) sur le DERNIER empilement terminé, "
             "sans refaire l'alignement ni l'empilement — sauve un nouveau TIFF. "
             "La base non corrigée est conservée : on peut donc changer les réglages et réappliquer."
         )
@@ -1107,11 +1131,17 @@ class MainWindow(QMainWindow):
             ref_index=ref_index,
             out_path=out_path,
             lp_correct=self.chk_lp.isChecked(),
-            lp_method=["synthetic", "graxpert"][self.combo_lp.currentIndex()],
             lp_strength=self.spin_lp.value() / 100.0,
-            lp_sky_only=self.chk_lp_sky.isChecked(),
+            lp_top_gradient=self.chk_top_sky.isChecked(),  # v1.1.3 : même gradient « haut = ciel » pour la PL
+            lp_top_boost=self.spin_top_boost.value(),
+            lp_lum_refine=self.chk_lum_refine.isChecked(),  # v1.1.5 : mêmes réglages que le masque affiché
+            lp_lum_thr=(self.spin_lum_thr.value() or None),
+            lp_edge_band=self.spin_edge_band.value(),
+            lp_fit_exclude=self.mask_editor.get_fit_mask(),  # v1.1.5 : zone exclue du calcul PL (bleu)
+            lp_target="dark" if self.combo_lp_target.currentIndex() == 1 else "median",  # v1.1.3
+            lp_shared_shape=self.chk_lp_shared.isChecked(),  # v1.1.3
             lp_feather=self._lp_feather_value(),  # v0.8.15 : fondu PL réglable en UI (« auto » par défaut)
-            lp_mask_source=["painted", "ml"][self.combo_lp_mask.currentIndex()],
+            stack_grow=self.spin_stack_grow.value(),  # v1.1.2 : marge d'empilement (px)
             meta_out=self._meta,   # v0.8.4 : sky/fg_w/stack_raw pour réappliquer la PL
         )
         self.btn_run.setEnabled(False)
@@ -1152,26 +1182,6 @@ class MainWindow(QMainWindow):
         v = self.spin_lp_feather.value()
         return None if v < 0 else float(v)
 
-    def _on_lp_method_changed(self, idx: int) -> None:
-        """v0.8.10 : « ML GraXpert » corrige TOUTE l'image (le modèle ONNX protège
-        l'avant-plan, y compris la lueur d'horizon) -> « Ciel uniquement » est grisé et
-        décoché pour GraXpert ; réactivé pour « Synthetic flat ».
-        v0.8.11 : « Masque PL » est aussi grisé en GraXpert (inutile : correction globale)."""
-        graxpert = idx == 1
-        self.chk_lp_sky.setEnabled(not graxpert)
-        if graxpert:
-            self.chk_lp_sky.setChecked(False)
-        self.chk_lp_sky.setToolTip(
-            "N'applique la correction que sur le ciel (masque avant-plan) — utile avec "
-            "« Synthetic flat » (anti-halos). Grisé en « ML GraXpert » : GraXpert corrige "
-            "TOUTE l'image, le modèle protège l'avant-plan, donc la lueur d'horizon est corrigée aussi."
-        )
-        self.combo_lp_mask.setEnabled(not graxpert)  # v0.8.11 : masque PL sans objet en GraXpert (correction globale)
-        self.combo_lp_mask.setToolTip(
-            "Masque utilisé POUR la correction de la pollution lumineuse : « Peint (UI) » ou « ML ONNX (auto) » "
-            "(ONNX brut, v0.8.9). Grisé en « ML GraXpert » (v0.8.11) : GraXpert corrige TOUTE l'image, aucun masque PL."
-        )
-
     def _redo_lp(self) -> None:
         """v0.8.4 — Réapplique la correction PL avec les réglages actuels sur le dernier
         stack terminé, SANS refaire l'alignement ni l'empilement : sauve un nouveau TIFF."""
@@ -1182,50 +1192,54 @@ class MainWindow(QMainWindow):
         from .pipeline import _save_result
 
         img = self._stack_base
-        if ["painted", "ml"][self.combo_lp_mask.currentIndex()] == "ml":  # v0.8.5 : masque ONNX pour la PL
-            import cv2
+        from .lpcorrect import auto_sky_weight
 
-            from .mlmask import foreground_mask_from_linear
-            from .rawio import load_image_linear
-            from .stacker import feather
+        # v1.0.0 : ciel = masque automatique calculé sur le stack (même source que le pipeline)
+        from .lpcorrect import combine_painted_sky
 
-            ref_path = self._meta.get("ref_path") or (self._lights[self._ref_index()] if self._lights else None)
-            wsh = self._meta.get("work_shape") or img.shape[:2]
-            fg = foreground_mask_from_linear(load_image_linear(ref_path).astype(np.float32),
-                                             debug_cb=self._log, top_gradient=False, top_boost=0.5,
-                                             guided=False, grow=0, smooth=1, proba_blur=0, morph=False)  # v0.8.7/0.8.9 + v0.9.0 : PL sans filtre guidé : ONNX 100 % brut pour la PL
-            fg = cv2.resize(fg, (wsh[1], wsh[0]), interpolation=cv2.INTER_NEAREST)
-            sky = 1.0 - feather(fg, sigma=max(2.0, min(wsh) * 0.004))
-            self._log("Masque PL : ONNX brut (seuil 0,5, sans lissage ni dilatation).")
-        else:
-            sky = self._meta.get("sky")
+        # v1.1.6 : masque PL calculé sur la RÉFÉRENCE (même image que le masque affiché), pas sur le stack
+        from .rawio import load_image_linear
+        import cv2 as _cv2
+
+        ref_img = load_image_linear(self._lights[self._ref_index()]).astype("float32")
+        if ref_img.ndim == 2:
+            ref_img = np.stack([ref_img] * 3, axis=-1)
+        if ref_img.shape[:2] != img.shape[:2]:
+            ref_img = _cv2.resize(ref_img, (img.shape[1], img.shape[0]), interpolation=_cv2.INTER_AREA)
+        sky = auto_sky_weight(ref_img, debug_cb=self._log,
+                              top_gradient=self.chk_top_sky.isChecked(), top_boost=self.spin_top_boost.value(),
+                              lum_refine=self.chk_lum_refine.isChecked(),
+                              lum_thr=(self.spin_lum_thr.value() or None),
+                              edge_band=self.spin_edge_band.value())
         fg_w = self._meta.get("fg_w")
-        method = ["synthetic", "graxpert"][self.combo_lp.currentIndex()]
+        # le ciel défini par l'utilisateur (avant-plan peint, sans marge) prime sur le modèle
+        fg_raw = self._meta.get("fg_raw")
+        sky = combine_painted_sky(sky, fg_raw if fg_raw is not None else None)
         strength = self.spin_lp.value() / 100.0
-        sky_only = self.chk_lp_sky.isChecked()
-        feather_v = self._lp_feather_value()  # v0.8.15 : fondu PL réglable
+        feather_v = self._lp_feather_value()
         out_path = self._unique_out()
-        if sky is not None:  # v0.8.9 : sauvegarde du masque PL utilisé (diagnostic)
-            try:
-                import imageio.v3 as iio
+        try:
+            import imageio.v3 as iio
 
-                b0, _ = os.path.splitext(out_path)
-                iio.imwrite(b0 + "_maskPL.png", (np.clip(sky, 0.0, 1.0) * 255.0).round().astype(np.uint8))
-                self._log(f"Masque PL écrit : {b0}_maskPL.png — ciel = {float((sky > 0.5).mean()):.0%} de l'image")
-            except Exception:
-                pass
-        self._log(
-            f"Réapplication PL — méthode « {method} », force {strength:.0%}, "
-            f"ciel uniquement={sky_only} — sur le dernier stack -> {out_path}"
-        )
+            b0, _ = os.path.splitext(out_path)
+            iio.imwrite(b0 + "_maskPL.png", (np.clip(sky, 0.0, 1.0) * 255.0).round().astype(np.uint8))
+            self._log(f"Masque PL écrit : {b0}_maskPL.png — ciel = {float((sky > 0.5).mean()):.0%} de l'image")
+        except Exception:
+            pass
+        self._log(f"Réapplication PL — force {strength:.0%} — sur le dernier stack -> {out_path}")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         QApplication.processEvents()
         try:
             if self.chk_lp.isChecked():
+                fit_ex = self.mask_editor.get_fit_mask()
+                if fit_ex is not None:
+                    import cv2 as _cv2
+                    fit_ex = _cv2.resize(fit_ex, (img.shape[1], img.shape[0]), interpolation=_cv2.INTER_NEAREST) > 127
                 out = correct_light_pollution(
-                    img, method=method, strength=strength, sky=sky, sky_only=sky_only,
-                    feather=feather_v,  # v0.8.15
-                    debug_cb=self._log,
+                    img, sky, strength=strength, feather=feather_v, debug_cb=self._log,
+                    fit_exclude=fit_ex,
+                    shared_shape=self.chk_lp_shared.isChecked(),
+                    target="dark" if self.combo_lp_target.currentIndex() == 1 else "median",
                 )
             else:
                 out = img  # case PL décochée : on sauvegarde le stack tel quel
