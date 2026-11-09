@@ -106,48 +106,144 @@ def _synthetic_background(img: np.ndarray, sky: np.ndarray | None = None, max_sm
     return bg.astype(np.float32)
 
 
+LP_MAX_STRENGTH = 1.0  # v0.9.3 : pas de sur-correction (la force est bornée à 100 %)
+
+
+def _poly_basis(h: int, w: int, deg: int) -> np.ndarray:
+    """Base polynomiale 2D (coordonnées normalisées -1..1), shape (h*w, K)."""
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
+    xn = xx / max(w - 1, 1) * 2.0 - 1.0
+    yn = yy / max(h - 1, 1) * 2.0 - 1.0
+    cols = [(xn ** i) * (yn ** j) for i in range(deg + 1) for j in range(deg + 1 - i)]
+    return np.stack(cols, axis=-1).reshape(h * w, -1)
+
+
+def _robust_lstsq(X: np.ndarray, y: np.ndarray, iters: int = 4, k: float = 3.0) -> np.ndarray:
+    """Moindres carrés avec rejet itératif des résidus aberrants (étoiles, bruit fort)."""
+    keep = np.ones(len(y), bool)
+    coef = None
+    for _ in range(iters):
+        if keep.sum() < 3 * X.shape[1]:
+            break
+        coef, *_ = np.linalg.lstsq(X[keep], y[keep], rcond=None)
+        res = y - X @ coef
+        scale = 1.4826 * float(np.median(np.abs(res[keep]))) + 1e-9
+        keep = np.abs(res) <= k * scale
+    if coef is None:
+        coef, *_ = np.linalg.lstsq(X, y, rcond=None)
+    return coef
+
+
+def _poly_background(img: np.ndarray, sky_bool: np.ndarray, deg: int = 3, max_small: int = 256) -> np.ndarray:
+    """v0.9.3 — fond de ciel par ajustement polynomial robuste (remplace le flou gaussien).
+
+    1. La FORME du gradient est ajustée une fois sur la luminance moyenne des pixels de ciel
+       (polynôme de degré `deg`, rejet des étoiles et des valeurs aberrantes).
+    2. Chaque canal reçoit ensuite seulement une amplitude a_c et un décalage b_c sur cette
+       même forme : le gradient a donc la même structure spatiale dans les trois couleurs
+       (pas de dégradé de couleur créé par le bruit de chaque canal).
+    Le fond est estimé sur une grille <= max_small px puis ré-échantillonné.
+    """
+    h, w = img.shape[:2]
+    if img.ndim == 2:
+        img = img[..., None]
+    s = min(1.0, max_small / max(h, w))
+    sw, sh = max(1, int(round(w * s))), max(1, int(round(h * s)))
+    small = cv2.resize(img, (sw, sh), interpolation=cv2.INTER_AREA)
+    if small.ndim == 2:
+        small = small[..., None]
+    sk = cv2.resize(sky_bool.astype(np.float32), (sw, sh), interpolation=cv2.INTER_AREA) >= 0.99
+    idx = sk.ravel()
+    if int(idx.sum()) < 50:  # pas assez de ciel : repli sur le flou
+        return _synthetic_background(img, sky=None)
+    B = _poly_basis(sh, sw, deg)
+    lum = small.mean(axis=-1).ravel()
+    cs = _robust_lstsq(B[idx], lum[idx])
+    S = (B @ cs).reshape(sh, sw)
+    Ssk = S.ravel()[idx]
+    X2 = np.stack([Ssk, np.ones_like(Ssk)], axis=1)
+    bg_small = np.empty_like(small, dtype=np.float32)
+    for c in range(small.shape[2]):
+        ab = _robust_lstsq(X2, small[..., c].ravel()[idx])
+        bg_small[..., c] = ab[0] * S + ab[1]
+    bg = cv2.resize(bg_small, (w, h), interpolation=cv2.INTER_LINEAR)
+    if bg.ndim == 2:
+        bg = bg[..., None]
+    return bg.astype(np.float32)
+
+
+def _soft_floor(x: np.ndarray, eps: float) -> np.ndarray:
+    """v0.9.3 — plancher doux : au-dessus de eps identique ; en dessous, décroissance
+    exponentielle vers 0 (monotone, continue) au lieu d'un écrêtage dur qui écrase les ombres."""
+    eps = max(float(eps), 1e-9)
+    low = eps * np.exp((np.minimum(x, eps) - eps) / eps)  # borné : pas de dépassement sur les grandes valeurs
+    return np.where(x >= eps, x, low).astype(np.float32)
+
+
 def synthetic_flat_correct(
     img: np.ndarray,
     sky: np.ndarray | None = None,
     strength: float = 1.0,
     sky_only: bool = True,
+    target: str = "median",
     target_pct: float = 10.0,
     feather: float | None = None,
     debug_cb=None,
-) -> np.ndarray:
-    """Soustrait un fond synthétique lisse (méthode par défaut).
+    bg_method: str = "poly",
+    deg: int = 3,
+    return_background: bool = False,
+):
+    """Soustrait un fond de ciel lisse (méthode par défaut).
 
-    img     : float32 HxWxC, linéaire (0..65535 ou 0..1).
-    sky     : poids flottants HxW (1 = ciel, 0 = avant-plan) ou None.
-    strength: 0..1 (1 = correction complète).
-    sky_only: si True et sky fourni, la correction n'est appliquée que sur le ciel
-              (l'avant-plan est rendu tel quel, fondu sur le masque).
-    target_pct : percentile du fond (sur le ciel) conservé comme niveau de fond cible.
+    img        : float32 HxWxC, linéaire (0..65535 ou 0..1).
+    sky        : poids flottants HxW (1 = ciel, 0 = avant-plan) ou None.
+    strength   : 0..1 (1 = correction complète ; borné à LP_MAX_STRENGTH).
+    sky_only   : si True et sky fourni, la correction n'est appliquée que sur le ciel.
+    target     : "median" (v0.9.3, défaut) — le niveau médian du ciel est conservé ;
+                 "pct" — ancien comportement, le percentile target_pct du fond devient le noir.
+    bg_method  : "poly" (v0.9.3, défaut) — ajustement polynomial robuste à forme partagée ;
+                 "blur" — ancien flou gaussien.
+    return_background : si True, retourne (image, fond estimé) — pour contrôle visuel.
     """
     img = img.astype(np.float32)
-    bg = _synthetic_background(img, sky=sky)  # v0.8.3 : fond estimé sur le ciel uniquement
-    out = img.copy()
+    level = 65535.0 if float(img.max()) > 1.5 else 1.0
+    strength = float(np.clip(strength, 0.0, LP_MAX_STRENGTH))
     if sky is not None:
         sky_bool = sky > 0.5
         if not sky_bool.any():
             sky_bool = np.ones(img.shape[:2], dtype=bool)
     else:
         sky_bool = np.ones(img.shape[:2], dtype=bool)
+
+    if bg_method == "blur":
+        bg = _synthetic_background(img, sky=sky)  # v0.8.3 : fond estimé sur le ciel uniquement
+    else:
+        bg = _poly_background(img, sky_bool, deg=deg)
+    if bg.ndim == 2:
+        bg = bg[..., None]
+
+    out = img.copy()
     targets = []
     for c in range(img.shape[2]):
-        t = float(np.percentile(bg[..., c][sky_bool], target_pct))
+        if target == "pct":
+            t = float(np.percentile(bg[..., c][sky_bool], target_pct))
+        else:  # médiane : la correction ne change pas le niveau moyen du ciel
+            t = float(np.median(bg[..., c][sky_bool]))
         targets.append(t)
         out[..., c] = img[..., c] - strength * (bg[..., c] - t)
-    out = np.maximum(out, 0.0)
+    out = _soft_floor(out, eps=0.002 * level)
     if sky is not None and sky_only:
         wgt = _feather_weight(sky, img.shape, feather)[..., None]
         out = out * wgt + img * (1.0 - wgt)
     if debug_cb:
         debug_cb(
-            "PL synthetic flat : cible ciel p{:g} = ".format(target_pct)
-            + ", ".join(f"{t:.0f}" for t in targets)
-            + f" (niveaux 0..{max(1.0, float(img.max())):.0f})"
+            f"PL synthetic ({bg_method}) : cible {target}"
+            + ("" if target == "median" else f" p{target_pct:g}")
+            + " = " + ", ".join(f"{t:.0f}" for t in targets)
+            + f" (niveaux 0..{level:.0f}), force {strength:.0%}"
         )
+    if return_background:
+        return out, bg
     return out
 
 
@@ -173,6 +269,11 @@ def _feather_weight(sky: np.ndarray, shape, feather: float | None = None) -> np.
     lissage ni dilatation) ; sinon sigma = feather en pixels.
     """
     wgt = np.clip(np.asarray(sky, dtype=np.float32), 0.0, 1.0)
+    # v0.9.3 : un masque déjà adouci (ML affiné, fondu du pipeline) porte sa propre transition :
+    # on ne le re-floute pas, sinon la zone de correction s'élargit sans raison.
+    soft_frac = float(((wgt > 0.05) & (wgt < 0.95)).mean())
+    if feather is None and soft_frac > 0.02:
+        return wgt
     sigma = max(2.0, min(shape[:2]) / 96.0) if feather is None else float(feather)
     if sigma > 0:
         grow = max(1, int(round(sigma * 1.5)))  # v0.8.6 : 1,5*sigma (0,5*sigma en v0.8.5)
@@ -278,7 +379,9 @@ def correct_light_pollution(
     model_path: str | None = None,
     progress_cb=None,
     debug_cb=None,
-) -> np.ndarray:
+    return_background: bool = False,
+    bg_method: str = "poly",
+):
     """Point d'entrée : corrige le dégradé de pollution lumineuse (linéaire, post-stack).
 
     method  : "synthetic" (défaut) ou "graxpert" (ML ONNX).
@@ -299,5 +402,6 @@ def correct_light_pollution(
             debug_cb=debug_cb,
         )
     return synthetic_flat_correct(
-        img, sky=sky, strength=strength, sky_only=sky_only, feather=feather, debug_cb=debug_cb
+        img, sky=sky, strength=strength, sky_only=sky_only, feather=feather, debug_cb=debug_cb,
+        bg_method=bg_method, return_background=return_background,
     )

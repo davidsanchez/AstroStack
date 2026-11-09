@@ -238,6 +238,7 @@ def run_pipeline(
         meta_out["work_shape"] = wh
 
     # --- correction de la pollution lumineuse (linéaire, post-empilement) ---
+    lp_bg = None
     if lp_correct:
         if should_cancel is not None and should_cancel():
             raise CancelledError("Annulation demandée par l'utilisateur.")
@@ -280,7 +281,7 @@ def run_pipeline(
             else:
                 cb(3, 0, 1, f"Image AVANT correction PL déjà existante, conservée : {pre_path}")
         try:
-            result = correct_light_pollution(
+            lp_ret = correct_light_pollution(
                 result,
                 method=lp_method,
                 strength=lp_strength,
@@ -288,7 +289,12 @@ def run_pipeline(
                 sky_only=lp_sky_only,
                 feather=lp_feather,
                 debug_cb=lambda m: cb(3, 0, 1, m),
+                return_background=bool(out_path),  # v0.9.3 : fond estimé exporté pour contrôle visuel
             )
+            if isinstance(lp_ret, tuple):
+                result, lp_bg = lp_ret
+            else:
+                result, lp_bg = lp_ret, None
         except ImportError as exc:
             raise RuntimeError(
                 "La méthode ML GraXpert a besoin de onnxruntime : pip install onnxruntime"
@@ -298,4 +304,13 @@ def run_pipeline(
     if out_path:
         paths = _save_result(out_path, result, fg_w)
         cb(4, n, n, f"Écrit : {paths['tif']}")
+        if lp_correct and lp_bg is not None:  # v0.9.3 : fond de pollution estimé, étiré pour l'œil
+            import imageio.v3 as iio
+
+            base0, _ = os.path.splitext(out_path)
+            b = np.mean(lp_bg, axis=2) if lp_bg.ndim == 3 else lp_bg
+            lo, hi = np.percentile(b, [1, 99.5])
+            disp = np.clip((b - lo) / max(hi - lo, 1e-6), 0, 1)
+            iio.imwrite(base0 + "_fondPL.png", (disp * 255).round().astype(np.uint8))
+            cb(4, n, n, f"Fond de pollution lumineuse écrit : {base0}_fondPL.png")
     return result
