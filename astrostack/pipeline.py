@@ -156,6 +156,9 @@ def run_pipeline(
         if mask.ndim == 3:  # masque RGB -> on prend un canal
             mask = mask[..., 0]
         m = cv2.resize(mask, (wh[1], wh[0]), interpolation=cv2.INTER_NEAREST)
+        # v1.1.1 : les petits îlots (étoiles détectées comme avant-plan) restent fixes à l'empilement
+        from .mlmask import drop_small_islands
+        m = drop_small_islands(m)
         # marge de sécurité : on dilate l'avant-plan de ~0,5 % (min 3 px) pour que le bord
         # du masque — et son fondu — tombent DANS LE CIEL, jamais sur l'avant-plan
         # (sinon les pixels d'avant-plan au bord du masque seraient warpés = fantômes)

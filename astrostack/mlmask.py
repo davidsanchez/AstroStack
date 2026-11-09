@@ -399,6 +399,28 @@ def sky_to_foreground_mask(img_u8_rgb: np.ndarray, path: str | None = None, smoo
     return refine_foreground(1.0 - sky, img_u8_rgb, lum_refine=lum_refine, lum_edge=lum_edge, **common)
 
 
+def drop_small_islands(mask: np.ndarray, drop_small: float = 0.0015) -> np.ndarray:
+    """v1.1.1 : retire les îlots d'avant-plan trop petits (étoiles, grains détectés comme avant-plan).
+
+    Un îlot isolé dans le ciel est fixe pendant l'empilement (il n'est pas recalé) : il produit un
+    point fantôme. Seuil identique à la voie ML : max(150 px, drop_small × surface).
+    mask : uint8 HxW (255 = avant-plan) à la taille de travail. Retourne un uint8 de même forme.
+    """
+    import cv2
+
+    b = (np.asarray(mask) > 127).astype(np.uint8)
+    if drop_small <= 0 or not b.any():
+        return np.asarray(mask, dtype=np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(b, connectivity=8)
+    if n <= 1:
+        return b * 255
+    min_area = max(150.0, drop_small * b.size)
+    small = np.zeros(n, bool)
+    small[1:] = stats[1:, cv2.CC_STAT_AREA] < min_area
+    b[small[labels]] = 0
+    return b * 255
+
+
 def foreground_mask_from_linear(img_f32: np.ndarray, max_side: int = 1200, **kw) -> np.ndarray:
     """v0.8.5 — Masque d'avant-plan uint8 (255 = avant-plan) à la TAILLE de `img_f32`,
     depuis une image linéaire float32 (0..65535) : downscale <= max_side px, tonemap,
