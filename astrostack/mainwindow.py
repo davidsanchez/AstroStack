@@ -737,7 +737,8 @@ class MainWindow(QMainWindow):
         self.log.setMaximumHeight(80)
         self.log.setLineWrapMode(QPlainTextEdit.WidgetWidth)          # v0.8.16 : le log revient à la ligne -> aucune barre horizontale
         self.log.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)   # v0.8.16 : aucune barre de scroll horizontale en bas du panneau
-        left.addWidget(self.log, 1)
+        left.addWidget(self.log)
+        left.addStretch(1)   # v1.2.0 : l'espace libre va ici, pas aux listes d'images (log masqué en mode simple)
 
         panel = QWidget()
         panel.setLayout(left)
