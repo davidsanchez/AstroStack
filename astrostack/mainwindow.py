@@ -448,7 +448,7 @@ class MainWindow(QMainWindow):
         lay_out = QHBoxLayout(box_out)
         self.edit_out = QLabel(self._out_dir)
         self.edit_out.setWordWrap(True)
-        btn_browse = QPushButton("Parcourir…")
+        btn_browse = QPushButton("Choisir le dossier…")
         btn_browse.clicked.connect(self._browse_out)
         lay_out.addWidget(self.edit_out, 1)
         lay_out.addWidget(btn_browse)
@@ -462,8 +462,8 @@ class MainWindow(QMainWindow):
         self.lbl_ref.setStyleSheet("color: #9ecbff; font-weight: 600;")
         self.lbl_ref.setToolTip("Image de base utilisée pour l'alignement et l'aperçu : c'est l'image du MILIEU de la liste (modifiable en CLI avec --ref-index N).")
         lay_mask.addWidget(self.lbl_ref)
-        btn_mask = QPushButton("Recharger l'aperçu…")
-        btn_mask.setToolTip("Recharge l'aperçu de la référence (image du milieu de la liste des Images)")
+        btn_mask = QPushButton("Recharger la référence")
+        btn_mask.setToolTip("Recharge l'image de référence (celle choisie dans la liste, ou l'image du milieu). Le masque peint est effacé.")
         btn_mask.clicked.connect(lambda: self._load_reference_preview(force=True))
         lay_mask.addWidget(btn_mask)
         row_brush = QHBoxLayout()
@@ -475,22 +475,22 @@ class MainWindow(QMainWindow):
         row_brush.addWidget(self.slider_brush, 1)
         lay_mask.addLayout(row_brush)
         row_tools = QHBoxLayout()
-        self.chk_erase = QCheckBox("Gomme")
+        self.chk_erase = QCheckBox("Gomme (effacer au pinceau)")
         self.chk_erase.toggled.connect(self._on_erase_toggled)
         row_tools.addWidget(self.chk_erase)
         row_tools.addStretch(1)
         lay_mask.addLayout(row_tools)
         #row_tools2 = QHBoxLayout()
-        btn_inv = QPushButton("Inverser")
+        btn_inv = QPushButton("Inverser le masque")
         btn_inv.clicked.connect(lambda: self.mask_editor.invert_mask())
         row_tools.addWidget(btn_inv)
-        btn_clear = QPushButton("Effacer")
+        btn_clear = QPushButton("Effacer le masque")
         btn_clear.clicked.connect(lambda: self.mask_editor.clear_mask())
         row_tools.addWidget(btn_clear)
 
 
         row_sky = QHBoxLayout()
-        self.chk_top_sky = QCheckBox("Gradient Ciel favorisé")
+        self.chk_top_sky = QCheckBox("Favoriser le haut comme ciel")
         self.chk_top_sky.setChecked(True)
         self.chk_top_sky.setToolTip("Masque ML : applique un dégradé vertical à la probabilité « ciel » — le HAUT de l'image est favorisé comme ciel (typique en astrophoto). Décochez pour désactiver.")
         row_sky.addWidget(self.chk_top_sky, 1)
@@ -566,8 +566,7 @@ class MainWindow(QMainWindow):
             "plus grand = détails plus fins, mais plus lent. 2000 px recommandé (1200 avant)."
         )
         row_lum.addWidget(self.spin_mask_res)
-        self.btn_lum_reset = QPushButton("Reset")   # v0.8.18 : remet les paramètres de luminance par défaut
-        self.btn_lum_reset.setMaximumWidth(52)
+        self.btn_lum_reset = QPushButton("Par défaut")   # v0.8.18 : remet les paramètres de luminance par défaut
         self.btn_lum_reset.setToolTip(
             "v0.8.18 — remet les paramètres de luminance aux valeurs par défaut : "
             "« Affiner la luminance » cochée, Seuil 0 (auto), Bande 40 px, Rés. 2000 px."
@@ -575,7 +574,7 @@ class MainWindow(QMainWindow):
         self.btn_lum_reset.clicked.connect(self._reset_lum_params)
         row_lum.addWidget(self.btn_lum_reset)
         lay_mask.addLayout(row_lum)
-        btn_ml = QPushButton("Masque ML (ONNX)…")
+        btn_ml = QPushButton("Générer le masque automatique (ONNX)")
         btn_ml.setToolTip("Segmente le ciel avec un modèle ONNX (segformer ADE20K), téléchargeable automatiquement. "
                          "Installez onnxruntime : pip install onnxruntime")
         btn_ml.clicked.connect(self._ml_mask)
@@ -663,7 +662,7 @@ class MainWindow(QMainWindow):
         # reste corrigée, elle ne sert qu'à estimer le fond.
         row_fit = QHBoxLayout()
         row_fit.setContentsMargins(0, 0, 0, 0)
-        self.chk_fit = QCheckBox("Peindre zone PL (bleu)")
+        self.chk_fit = QCheckBox("Peindre la zone à exclure de la PL (bleu)")
         self.chk_fit.setToolTip(
             "Coché : le pinceau peint en BLEU une zone exclue du calcul de la PL (nuages lumineux). "
             "Décoché : le pinceau revient à l'avant-plan rouge du masque d'alignement."
@@ -671,7 +670,7 @@ class MainWindow(QMainWindow):
         self.chk_fit.toggled.connect(lambda v: setattr(self.mask_editor, "paint_fit", bool(v)))
         row_fit.addWidget(self.chk_fit)
         row_fit.addStretch(1)
-        btn_reset_pl = QPushButton("Réinitialiser masque PL")
+        btn_reset_pl = QPushButton("Effacer la zone bleue (PL)")
         btn_reset_pl.setToolTip("Efface la zone bleue d'exclusion PL. Le masque d'alignement (rouge) n'est pas modifié.")
         btn_reset_pl.clicked.connect(lambda: self.mask_editor.clear_fit_mask())
         row_fit.addWidget(btn_reset_pl)
@@ -695,7 +694,7 @@ class MainWindow(QMainWindow):
             "Évite la dominante bleue sous les nuages chauds. Décochez pour un gradient indépendant par canal."
         )
         lay_lp.addWidget(self.chk_lp_shared)
-        self.btn_lp_redo = QPushButton("Réappliquer la PL sur le dernier stack")
+        self.btn_lp_redo = QPushButton("Réappliquer la PL au dernier stack")
         self.btn_lp_redo.setEnabled(False)
         self.btn_lp_redo.setToolTip(
             "v0.8.4 : réapplique la correction de la pollution lumineuse avec les réglages "
@@ -710,11 +709,11 @@ class MainWindow(QMainWindow):
 
 
         row_run = QHBoxLayout()
-        self.btn_run = QPushButton("▶ Lancer")
+        self.btn_run = QPushButton("▶ Lancer l'empilement")
         self.btn_run.setStyleSheet("font-weight: bold; padding: 6px; background-color: #2f5d8a; border-color: #4a90d9;")
         self.btn_run.clicked.connect(self._run)
         row_run.addWidget(self.btn_run, 1)
-        self.btn_stop = QPushButton("⏹ Arrêter")
+        self.btn_stop = QPushButton("⏹ Arrêter l'empilement")
         self.btn_stop.setEnabled(False)
         self.btn_stop.setToolTip("Annuler l'empilement en cours")
         self.btn_stop.clicked.connect(self._on_stop)
@@ -776,8 +775,8 @@ class MainWindow(QMainWindow):
         zoom_bar.addStretch(1)
         btn_zm = QPushButton("−")
         btn_zp = QPushButton("+")
-        btn_zfit = QPushButton("Ajuster")
-        btn_z100 = QPushButton("100 %")
+        btn_zfit = QPushButton("Ajuster à la fenêtre")
+        btn_z100 = QPushButton("Taille réelle")
         for b in (btn_zm, btn_zp):
             b.setFixedWidth(34)
         btn_zm.setToolTip("Dézoomer (Ctrl + molette)")
@@ -833,7 +832,7 @@ class MainWindow(QMainWindow):
             "Ctrl+Shift+O": ("Ajouter un dossier d'images…", lambda: self._add_dir(self._lights, self.list_lights)),
             "Ctrl+D": ("Ajouter des darks…", lambda: self._add_files(self._darks, self.list_darks)),
             "Ctrl+Shift+D": ("Ajouter un dossier de darks…", lambda: self._add_dir(self._darks, self.list_darks)),
-            "Ctrl+M": ("Masque ML (ONNX)", self._ml_mask),
+            "Ctrl+M": ("Générer le masque automatique (ONNX)", self._ml_mask),
             "Ctrl+Return": ("Lancer l'empilement", self._run),
             "Escape": ("Arrêter l'empilement", self._on_stop),
             "X": ("Gomme (on/off)", lambda: self.chk_erase.setChecked(not self.chk_erase.isChecked())),
@@ -886,7 +885,7 @@ class MainWindow(QMainWindow):
         lst.setTextElideMode(Qt.ElideMiddle)                      # v0.8.16 : noms de fichiers longs tronqués avec « … »
         box.addWidget(lst)
         row = QHBoxLayout()
-        btn_files = QPushButton("Ajouter…")   # boîte de dialogue FICHiers (ne se rouvre pas ensuite)
+        btn_files = QPushButton("Ajouter des images…")   # boîte de dialogue FICHiers (ne se rouvre pas ensuite)
         btn_clear = QPushButton("Vider la liste")  # v1.2.0 : remplace « Dossier… » (raccourci Ctrl+Maj+O conservé)
         btn_clear.setToolTip("Retire toutes les images de cette liste")
         btn_files.clicked.connect(lambda: self._add_files(backing, lst))
