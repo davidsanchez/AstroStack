@@ -69,11 +69,14 @@ def _robust_lstsq(X: np.ndarray, y: np.ndarray, iters: int = 4, k: float = 3.0) 
     return coef
 
 
-def estimate_background(img: np.ndarray, sky_w: np.ndarray, deg: int = 3, max_small: int = 256) -> np.ndarray | None:
+def estimate_background(img: np.ndarray, sky_w: np.ndarray, deg: int = 3, max_small: int = 256,
+                        shared_shape: bool = False) -> np.ndarray | None:
     """Fond de pollution HxWxC estimé sur le ciel, ou None si le ciel est insuffisant.
 
-    La forme (polynôme de degré `deg` sur la luminance moyenne) est ajustée une fois ; chaque canal
-    reçoit ensuite une amplitude a_c et un décalage b_c sur cette même forme.
+    v1.1.0 (défaut, shared_shape=False) : CORRECTION PAR CANAL — chaque canal (R, G, B) reçoit son
+    propre polynôme, ajusté sur ses propres pixels de ciel. Chaque gradient de couleur est ainsi
+    capturé, même lorsque sa forme diffère d'une couleur à l'autre.
+    shared_shape=True : ancien comportement (forme commune + amplitude et décalage par canal).
     """
     h, w = img.shape[:2]
     if img.ndim == 2:
@@ -88,15 +91,20 @@ def estimate_background(img: np.ndarray, sky_w: np.ndarray, deg: int = 3, max_sm
     if int(idx.sum()) < 50:
         return None
     B = _poly_basis(sh, sw, deg)
-    lum = small.mean(axis=-1).ravel()
-    cs = _robust_lstsq(B[idx], lum[idx])
-    S = (B @ cs).reshape(sh, sw)
-    Ssk = S.ravel()[idx]
-    X2 = np.stack([Ssk, np.ones_like(Ssk)], axis=1)
     bg_small = np.empty(small.shape, dtype=np.float32)
-    for c in range(small.shape[2]):
-        ab = _robust_lstsq(X2, small[..., c].ravel()[idx])
-        bg_small[..., c] = ab[0] * S + ab[1]
+    if shared_shape:
+        lum = small.mean(axis=-1).ravel()
+        cs = _robust_lstsq(B[idx], lum[idx])
+        S = (B @ cs).reshape(sh, sw)
+        Ssk = S.ravel()[idx]
+        X2 = np.stack([Ssk, np.ones_like(Ssk)], axis=1)
+        for c in range(small.shape[2]):
+            ab = _robust_lstsq(X2, small[..., c].ravel()[idx])
+            bg_small[..., c] = ab[0] * S + ab[1]
+    else:
+        for c in range(small.shape[2]):
+            cs = _robust_lstsq(B[idx], small[..., c].ravel()[idx])
+            bg_small[..., c] = (B @ cs).reshape(sh, sw)
     bg = cv2.resize(bg_small, (w, h), interpolation=cv2.INTER_LINEAR)
     if bg.ndim == 2:
         bg = bg[..., None]
@@ -136,6 +144,8 @@ def correct_light_pollution(
     strength: float = 1.0,
     feather: float | None = None,
     deg: int = 3,
+    neutral: bool = True,
+    shared_shape: bool = False,
     return_background: bool = False,
     debug_cb=None,
 ):
@@ -155,25 +165,32 @@ def correct_light_pollution(
             debug_cb("PL : aucun ciel détecté, correction ignorée.")
         return (img, None) if return_background else img
 
-    bg = estimate_background(img, sky, deg=deg)
+    bg = estimate_background(img, sky, deg=deg, shared_shape=shared_shape)
     if bg is None:
         if debug_cb:
             debug_cb("PL : ciel insuffisant pour estimer le fond, correction ignorée.")
         return (img, None) if return_background else img
 
+    # Cible par canal. Le niveau médian du ciel est conservé. Avec neutral=True (défaut), les trois
+    # médianes sont ramenées à une même valeur : la dominante de couleur du ciel disparaît (fond neutre).
+    med_img = np.array([float(np.median(img[..., c][sky_full])) for c in range(img.shape[2])])
+    med_bg = np.array([float(np.median(bg[..., c][sky_full])) for c in range(img.shape[2])])
+    if neutral:
+        level_ref = float(med_img.mean())
+        targets = level_ref - med_img + med_bg
+    else:
+        targets = med_bg.copy()
     out = img.copy()
-    targets = []
     for c in range(img.shape[2]):
-        t = float(np.median(bg[..., c][sky_full]))  # le niveau médian du ciel ne change pas
-        targets.append(t)
-        out[..., c] = img[..., c] - strength * (bg[..., c] - t)
+        out[..., c] = img[..., c] - strength * (bg[..., c] - targets[c])
     out = soft_floor(out, eps=0.002 * level)
     wgt = sky_transition(sky, feather)[..., None]
     out = out * wgt + img * (1.0 - wgt)
     if debug_cb:
         debug_cb(
-            "PL : fond polynomial (degré {}), cible = médiane du ciel ({}), force {:.0%}".format(
-                deg, ", ".join(f"{t:.0f}" for t in targets), strength
+            "PL : fond polynomial par canal (degré {}), {} ({}), force {:.0%}".format(
+                deg, "fond neutre" if neutral else "niveau par canal",
+                ", ".join(f"{t:.0f}" for t in targets), strength
             )
             + f" (niveaux 0..{level:.0f})"
         )

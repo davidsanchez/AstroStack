@@ -113,12 +113,47 @@ def test_no_sky_no_change():
     assert np.array_equal(out, img), "sans ciel détecté, l'image doit rester identique"
 
 
+def make_colour_shape_scene(seed: int = 5):
+    """Dominante de couleur ET formes de gradient différentes d'une couleur à l'autre."""
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    lin = xx / W
+    lobe = (1.0 - yy / H) ** 3                       # lueur concentrée près de l'horizon (forme différente)
+    base = 4000.0
+    chans = [base + 2000.0 * lin + 1200.0 * lobe,    # R : gradient linéaire + lueur
+             base + 1800.0 * lin + 300.0 * lobe,     # G
+             base + 900.0 * lin + 2000.0 * lobe]     # B : lueur plus forte, gradient différent
+    img = np.stack(chans, axis=-1).astype(np.float32) + rng.normal(0, 25, (H, W, 3)).astype(np.float32)
+    img[FG_TOP:] = 900.0 + rng.normal(0, 40, (H - FG_TOP, W, 3)).astype(np.float32)
+    fgt = np.zeros((H, W), bool)
+    fgt[FG_TOP:] = True
+    return np.clip(img, 0, 65535), fgt
+
+
+def test_per_channel_gradient_and_neutral_sky():
+    img, fgt = make_colour_shape_scene(5)
+    sky = auto_like_sky(img, fgt)
+    out = correct_light_pollution(img, sky, strength=1.0)  # v1.1.0 : par canal + fond neutre
+    shared = correct_light_pollution(img, sky, strength=1.0, shared_shape=True, neutral=False)
+    for c in range(3):
+        g_out = abs(grad_of(out, c))
+        g_shared = abs(grad_of(shared, c))
+        print(f"canal {c} : gradient résiduel par canal {g_out:.0f} ; forme commune {g_shared:.0f}")
+        assert g_out < 0.2 * abs(grad_of(img, c)), f"canal {c} : gradient non aplati"
+        assert g_out < g_shared + 1.0, "la correction par canal doit être au moins aussi bonne"
+    meds = [float(np.median(out[:FG_TOP - 20, :, c])) for c in range(3)]
+    spread = (max(meds) - min(meds)) / np.mean(meds)
+    print(f"médianes du ciel après correction : {[round(m) for m in meds]} (écart {spread:.2%})")
+    assert spread < 0.01, f"fond non neutre (écart {spread:.2%})"
+
+
 def main():
     test_gradient_and_sky_level()
     test_stars_keep_contrast()
     test_foreground_untouched_and_no_negatives()
     test_strength_capped_and_background_export()
     test_no_sky_no_change()
+    test_per_channel_gradient_and_neutral_sky()
     print("OK — correction de pollution lumineuse validée")
 
 

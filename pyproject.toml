@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "astrostack"
-version = "1.0.0"
+version = "1.1.0"
 description = "Empilement de paysages de nuit (star stacking) : alignement des étoiles, avant-plan fixe peint au pinceau, darks/flats, lecture RAW — macOS & Windows"
 readme = "README.md"
 requires-python = ">=3.10"
