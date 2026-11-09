@@ -286,7 +286,14 @@ QGroupBox::indicator:checked { background-color: #4a90d9; border-color: #6db3f2;
 QGroupBox#CollapsibleBox { margin-top: 4px; padding: 2px 6px 6px 6px; background-color: #202027; }
 QCheckBox#cbHeader { font-weight: 600; color: #9ecbff; font-size: 12px; spacing: 4px; }
 QCheckBox#cbHeader::indicator { width: 0px; height: 0px; border: none; background: transparent; }  /* v0.8.8 : indicateur masqué, flèche ▸/▾ dans le titre */
-QListWidget { background-color: #232329; border: 1px solid #3a3a42; border-radius: 4px; color: #e8e8ec; }
+QListWidget { background-color: #232329; border: 1px solid #3a3a42; border-radius: 8px; color: #e8e8ec; }
+QPushButton { background-color: #2a2a33; border: 1px solid #3a3a46; border-radius: 8px; padding: 5px 12px; }
+QPushButton:hover { background-color: #34343f; border-color: #4a90d9; }
+QPushButton:pressed { background-color: #23232b; }
+QPushButton:disabled { color: #6a6a74; background-color: #222229; }
+QSlider::groove:horizontal { height: 6px; background: #34343f; border-radius: 3px; }
+QSlider::sub-page:horizontal { background: #4a90d9; border-radius: 3px; }
+QSlider::handle:horizontal { background: #9ecbff; width: 14px; height: 14px; margin: -4px 0; border-radius: 7px; }
 QListWidget::item { padding: 1px; }
 QPushButton { background-color: #2e2e36; border: 1px solid #45454f; border-radius: 4px; padding: 4px 8px; color: #e8e8ec; }
 QPushButton:hover { background-color: #3a3a44; }
@@ -621,13 +628,15 @@ class MainWindow(QMainWindow):
         lay_lp.addWidget(self.chk_lp)
         row_lp2 = QHBoxLayout()
         row_lp2.addWidget(QLabel("Force"))
-        self.spin_lp = QSpinBox()
-        self.spin_lp.setRange(0, 100)   # v0.9.3 : 100 % maximum (la sur-correction creusait des halos sombres)
+        self.spin_lp = QSlider(Qt.Horizontal)   # v1.2.0 : curseur (0–100 %, 100 % = maximum)
+        self.spin_lp.setRange(0, 100)
         self.spin_lp.setValue(100)
-        self.spin_lp.setSuffix(" %")
-        self.spin_lp.setMaximumWidth(80)
         self.spin_lp.setToolTip("Force de la correction PL : 100 % = correction complète (maximum), 0 % = off.")
-        row_lp2.addWidget(self.spin_lp)
+        self.lbl_lp_val = QLabel("100 %")
+        self.lbl_lp_val.setMinimumWidth(40)
+        self.spin_lp.valueChanged.connect(lambda v: self.lbl_lp_val.setText(f"{v} %"))
+        row_lp2.addWidget(self.spin_lp, 1)
+        row_lp2.addWidget(self.lbl_lp_val)
         row_lp2.addStretch(1)
         lay_lp.addLayout(row_lp2)
         row_lp3 = QHBoxLayout()
@@ -855,11 +864,12 @@ class MainWindow(QMainWindow):
         box.addWidget(lst)
         row = QHBoxLayout()
         btn_files = QPushButton("Ajouter…")   # boîte de dialogue FICHiers (ne se rouvre pas ensuite)
-        btn_dir = QPushButton("Dossier…")     # boîte de dialogue DOSSIER, indépendante
+        btn_clear = QPushButton("Vider la liste")  # v1.2.0 : remplace « Dossier… » (raccourci Ctrl+Maj+O conservé)
+        btn_clear.setToolTip("Retire toutes les images de cette liste")
         btn_files.clicked.connect(lambda: self._add_files(backing, lst))
-        btn_dir.clicked.connect(lambda: self._add_dir(backing, lst))
+        btn_clear.clicked.connect(lambda: self._clear_list(backing, lst))
         row.addWidget(btn_files)
-        row.addWidget(btn_dir)
+        row.addWidget(btn_clear)
         box.addLayout(row)
         return lst
 
@@ -908,6 +918,24 @@ class MainWindow(QMainWindow):
         self._log(f"{len(files)} fichier(s) ajouté(s) ({len(backing)} au total).")
         self._on_lists_changed()
 
+    def _set_ref_label(self, name: str | None) -> None:
+        """v1.2.0 : pastille verte quand une référence est active, grise sinon."""
+        import html as _html
+        if name:
+            self.lbl_ref.setTextFormat(Qt.RichText)
+            self.lbl_ref.setText(
+                '<span style="color:#3ddc84;font-size:14px;">●</span>&nbsp;'
+                f'Référence : {_html.escape(name)}')
+        else:
+            self.lbl_ref.setTextFormat(Qt.PlainText)
+            self.lbl_ref.setText("○  Référence : — (ajoutez des images)")
+
+    def _clear_list(self, backing: list[str], lst: QListWidget) -> None:
+        backing.clear()
+        lst.clear()
+        self._log("Liste vidée.")
+        self._on_lists_changed()
+
     def _add_dir(self, backing: list[str], lst: QListWidget) -> None:
         d = QFileDialog.getExistingDirectory(self, "Choisir un dossier d'images", self._last_dir)
         if not d:
@@ -927,7 +955,7 @@ class MainWindow(QMainWindow):
             self._load_reference_preview(force=False)
         else:
             self._ref_idx = None
-            self.lbl_ref.setText("Référence : — (ajoutez des images)")
+            self._set_ref_label(None)
 
     def _ref_index(self) -> int:
         if not self._lights:
@@ -966,7 +994,7 @@ class MainWindow(QMainWindow):
         if not self._lights:
             return
         idx = self._ref_index()
-        self.lbl_ref.setText(f"Référence : {os.path.basename(self._lights[idx])}")
+        self._set_ref_label(os.path.basename(self._lights[idx]))
         self._highlight_ref()
         if not force and self.mask_editor.has_image():
             m = self.mask_editor.get_mask()
@@ -1246,7 +1274,7 @@ class MainWindow(QMainWindow):
                 self._log("Correction PL désactivée : sauvegarde du stack tel quel.")
             if fg_w is None:
                 fg_w = np.zeros(out.shape[:2], np.float32)
-            paths = _save_result(out_path, out, fg_w)
+            paths = _save_result(out_path, out, fg_w, fg_base=self._meta.get("fg_raw"))
             qimg = u16_to_qimage(out)
             self._result_full = QPixmap.fromImage(qimg)
             self._fit_result()

@@ -21,6 +21,7 @@ class MaskEditor(QWidget):
         self.setMouseTracking(True)
         self._qimg: QImage | None = None
         self._mask: np.ndarray | None = None  # uint8 HxW, 255 = avant-plan peint
+        self._margin_cache: np.ndarray | None = None  # v1.2.0 : extension (dilatation) affichée en orange
         self._fit: np.ndarray | None = None   # v1.1.5 : uint8 HxW, 255 = zone exclue du CALCUL PL (nuages)
         self.paint_fit = False                # True : le pinceau peint la zone d'exclusion PL
         self.brush_size = 40  # diamètre en pixels de l'aperçu
@@ -52,6 +53,7 @@ class MaskEditor(QWidget):
 
             m = cv2.resize(m, (self._qimg.width(), self._qimg.height()), interpolation=cv2.INTER_LINEAR)
         self._mask = m.astype(np.uint8)
+        self._margin_cache = None
         self.update()
 
     def get_fit_mask(self) -> np.ndarray | None:
@@ -74,11 +76,13 @@ class MaskEditor(QWidget):
     def clear_mask(self) -> None:
         if self._mask is not None:
             self._mask[:] = 0
+            self._margin_cache = None
             self.update()
 
     def invert_mask(self) -> None:
         if self._mask is not None:
             self._mask = np.where(self._mask > 0, 0, 255).astype(np.uint8)
+            self._margin_cache = None
             self.update()
 
     def auto_threshold(self, thr: int) -> None:
@@ -97,6 +101,7 @@ class MaskEditor(QWidget):
         # bords adoucis (le pipeline floute de toute façon pour le fondu)
         mf = cv2.GaussianBlur(m.astype(np.float32), (5, 5), 0)
         self._mask = np.where(mf > 127, 255, 0).astype(np.uint8)
+        self._margin_cache = None
         self.update()
 
     # --- peinture ---
@@ -114,6 +119,8 @@ class MaskEditor(QWidget):
             return
         x, y = pos
         target = self._fit if self.paint_fit else self._mask
+        if not self.paint_fit:
+            self._margin_cache = None
         if target is None:
             return
         r = max(1, self.brush_size // 2)
@@ -137,6 +144,16 @@ class MaskEditor(QWidget):
         self._painting = False
 
     # --- dessin ---
+    def _margin(self) -> np.ndarray:
+        """v1.2.0 : pixels ajoutés par la dilatation de marge (même règle que le pipeline)."""
+        if self._margin_cache is None:
+            import cv2
+            base = (self._mask > 0).astype(np.uint8)
+            k = max(3, int(round(min(base.shape) * 0.005))) | 1
+            dil = cv2.dilate(base, np.ones((k, k), np.uint8))
+            self._margin_cache = ((dil > 0) & (base == 0)).astype(np.uint8)
+        return self._margin_cache
+
     def paintEvent(self, ev) -> None:
         p = QPainter(self)
         if self._qimg is not None:
@@ -150,6 +167,14 @@ class MaskEditor(QWidget):
             rgba[..., 3] = (self._mask > 0).astype(np.uint8) * 110  # alpha
             overlay = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
             p.drawImage(0, 0, overlay)
+            if self._mask.any():
+                mg = self._margin()
+                rgba2 = np.zeros((h, w, 4), dtype=np.uint8)
+                rgba2[..., 0] = 255
+                rgba2[..., 1] = 140   # orange : extension par dilatation (marge)
+                rgba2[..., 3] = mg * 150
+                ov2 = QImage(rgba2.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
+                p.drawImage(0, 0, ov2)
         if self._qimg is not None and self._fit is not None and self._fit.any():
             h, w = self._fit.shape
             rgba = np.zeros((h, w, 4), dtype=np.uint8)
