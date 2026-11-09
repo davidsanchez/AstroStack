@@ -23,23 +23,26 @@ LP_MAX_STRENGTH = 1.0  # la force est bornée à 100 %
 
 def auto_sky_weight(img_linear: np.ndarray, out_hw: tuple[int, int] | None = None, debug_cb=None,
                     top_gradient: bool = True, top_boost: float = 0.5) -> np.ndarray:
-    """Poids de ciel float32 HxW (1 = ciel, 0 = avant-plan), depuis le masque automatique.
+    """Poids de ciel float32 HxW (1 = ciel, 0 = avant-plan) : le masque ONNX DE BASE, avec le
+    dégradé « haut = ciel » — exactement ce que voit l'utilisateur avant l'empilement.
 
-    Le masque est calculé sur l'image linéaire donnée (en pratique : le stack), avec le filtre
-    guidé et le recalage sur la luminance (réglages par défaut de l'interface).
+    v1.1.4 : pas d'affinage luminance, pas de filtre guidé, pas de marge, pas de lissage de la
+    probabilité : la PL n'utilise que la sortie brute du modèle plus le dégradé.
     Lève ImportError si onnxruntime n'est pas installé.
     """
     from .mlmask import foreground_mask_from_linear
 
     fg = foreground_mask_from_linear(
         img_linear.astype(np.float32),
+        max_side=2000,  # même résolution de travail que le masque de l'interface (défaut 2000 px)
         debug_cb=debug_cb,
         grow=0,
-        lum_refine=True,
-        lum_edge=True,
-        edge_band=40,
-        guided=True,
-        top_gradient=top_gradient,  # v1.1.3 : même dégradé « haut = ciel » que le masque de l'interface
+        lum_refine=False,
+        lum_edge=False,
+        guided=False,
+        drop_small=0.0,
+        proba_blur=0.0,
+        top_gradient=top_gradient,
         top_boost=top_boost,
     )
     if out_hw is not None and fg.shape[:2] != tuple(out_hw):
@@ -181,17 +184,16 @@ def sky_transition(sky: np.ndarray, feather: float | None = None) -> np.ndarray:
     """Poids de correction float32 HxW, transition douce au bord du masque.
 
     - masque déjà adouci (ML affiné) : utilisé tel quel, sa transition est déjà là ;
-    - masque dur : léger flou (sigma auto = min(h,w)/96) après dilatation de 1,5 sigma côté ciel ;
+    - masque dur : léger flou court, SANS dilatation (v1.1.4) : l'ancienne dilatation de ~60 px
+      faisait déborder la correction dans le sol et les arbres (bande claire au bord du sol) ;
     - feather=0 : masque dur, sans transition.
     """
     wgt = np.clip(np.asarray(sky, dtype=np.float32), 0.0, 1.0)
     soft_frac = float(((wgt > 0.05) & (wgt < 0.95)).mean())
     if feather is None and soft_frac > 0.02:
         return wgt
-    sigma = max(2.0, min(wgt.shape[:2]) / 96.0) if feather is None else float(feather)
+    sigma = max(1.5, min(wgt.shape[:2]) / 800.0) if feather is None else float(feather)
     if sigma > 0:
-        grow = max(1, int(round(sigma * 1.5)))
-        wgt = cv2.dilate(wgt, np.ones((3, 3), np.uint8), iterations=grow)
         wgt = cv2.GaussianBlur(wgt, (0, 0), sigmaX=sigma, sigmaY=sigma)
     return np.clip(wgt, 0.0, 1.0)
 

@@ -163,6 +163,7 @@ def run_pipeline(
         # v1.1.1 : les petits îlots (étoiles détectées comme avant-plan) restent fixes à l'empilement
         from .mlmask import drop_small_islands
         m = drop_small_islands(m)
+        m_raw_painted = m.copy()  # v1.1.4 : masque peint sans dilatation ni fondu, pour la PL
         # marge de sécurité : on dilate l'avant-plan de ~0,5 % (min 3 px) pour que le bord
         # du masque — et son fondu — tombent DANS LE CIEL, jamais sur l'avant-plan
         # (sinon les pixels d'avant-plan au bord du masque seraient warpés = fantômes)
@@ -249,12 +250,13 @@ def run_pipeline(
                                      top_gradient=lp_top_gradient, top_boost=lp_top_boost)
             # le ciel défini par l'utilisateur (avant-plan peint) prime sur le modèle
             from .lpcorrect import combine_painted_sky
-            sky_lp = combine_painted_sky(sky_lp, fg_w if mask is not None else None)
+            sky_lp = combine_painted_sky(sky_lp, m_raw_painted if mask is not None else None)
         except ImportError as exc:
             raise RuntimeError("La détection du ciel a besoin de onnxruntime : pip install onnxruntime") from exc
         if meta_out is not None:
             meta_out["sky_lp"] = sky_lp
             meta_out["ref_path"] = lights[ref_index]
+            meta_out["fg_raw"] = m_raw_painted if mask is not None else None  # v1.1.4 : pour « Réappliquer la PL »
         if out_path:
             base, ext = os.path.splitext(out_path)
             try:  # diagnostic : masque ciel utilisé

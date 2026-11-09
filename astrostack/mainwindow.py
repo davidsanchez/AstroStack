@@ -1178,8 +1178,9 @@ class MainWindow(QMainWindow):
         sky = auto_sky_weight(img, debug_cb=self._log,
                               top_gradient=self.chk_top_sky.isChecked(), top_boost=self.spin_top_boost.value())
         fg_w = self._meta.get("fg_w")
-        # le ciel défini par l'utilisateur (avant-plan peint) prime sur le modèle
-        sky = combine_painted_sky(sky, fg_w)
+        # le ciel défini par l'utilisateur (avant-plan peint, sans marge) prime sur le modèle
+        fg_raw = self._meta.get("fg_raw")
+        sky = combine_painted_sky(sky, fg_raw if fg_raw is not None else None)
         strength = self.spin_lp.value() / 100.0
         feather_v = self._lp_feather_value()
         out_path = self._unique_out()
