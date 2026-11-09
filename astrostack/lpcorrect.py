@@ -22,13 +22,14 @@ LP_MAX_STRENGTH = 1.0  # la force est bornée à 100 %
 
 
 def auto_sky_weight(img_linear: np.ndarray, out_hw: tuple[int, int] | None = None, debug_cb=None,
-                    top_gradient: bool = True, top_boost: float = 0.5) -> np.ndarray:
-    """Poids de ciel float32 HxW (1 = ciel, 0 = avant-plan) : le masque ONNX DE BASE, avec le
-    dégradé « haut = ciel » — exactement ce que voit l'utilisateur avant l'empilement.
+                    top_gradient: bool = True, top_boost: float = 0.5, lum_refine: bool = True,
+                    lum_thr: float | None = None, edge_band: int = 40) -> np.ndarray:
+    """Poids de ciel float32 HxW (1 = ciel, 0 = avant-plan) : EXACTEMENT le masque ML de l'interface
+    (dégradé « haut = ciel », affinage luminance, seuil, bord recalé, filtre guidé, sans marge).
 
-    v1.1.4 : pas d'affinage luminance, pas de filtre guidé, pas de marge, pas de lissage de la
-    probabilité : la PL n'utilise que la sortie brute du modèle plus le dégradé.
-    Lève ImportError si onnxruntime n'est pas installé.
+    v1.1.5 : la version « ONNX brut » gardait les nuages lumineux classés avant-plan (îlots) que
+    l'affinage luminance de l'interface corrige. La PL reprend donc les mêmes réglages que le masque
+    affiché. Lève ImportError si onnxruntime n'est pas installé.
     """
     from .mlmask import foreground_mask_from_linear
 
@@ -37,11 +38,10 @@ def auto_sky_weight(img_linear: np.ndarray, out_hw: tuple[int, int] | None = Non
         max_side=2000,  # même résolution de travail que le masque de l'interface (défaut 2000 px)
         debug_cb=debug_cb,
         grow=0,
-        lum_refine=False,
-        lum_edge=False,
-        guided=False,
-        drop_small=0.0,
-        proba_blur=0.0,
+        lum_refine=lum_refine,
+        lum_thr=lum_thr,
+        lum_edge=edge_band > 0,
+        edge_band=edge_band,
         top_gradient=top_gradient,
         top_boost=top_boost,
     )

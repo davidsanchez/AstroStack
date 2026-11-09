@@ -1116,6 +1116,9 @@ class MainWindow(QMainWindow):
             lp_strength=self.spin_lp.value() / 100.0,
             lp_top_gradient=self.chk_top_sky.isChecked(),  # v1.1.3 : même gradient « haut = ciel » pour la PL
             lp_top_boost=self.spin_top_boost.value(),
+            lp_lum_refine=self.chk_lum_refine.isChecked(),  # v1.1.5 : mêmes réglages que le masque affiché
+            lp_lum_thr=(self.spin_lum_thr.value() or None),
+            lp_edge_band=self.spin_edge_band.value(),
             lp_target="dark" if self.combo_lp_target.currentIndex() == 1 else "median",  # v1.1.3
             lp_shared_shape=self.chk_lp_shared.isChecked(),  # v1.1.3
             lp_feather=self._lp_feather_value(),  # v0.8.15 : fondu PL réglable en UI (« auto » par défaut)
@@ -1176,7 +1179,10 @@ class MainWindow(QMainWindow):
         from .lpcorrect import combine_painted_sky
 
         sky = auto_sky_weight(img, debug_cb=self._log,
-                              top_gradient=self.chk_top_sky.isChecked(), top_boost=self.spin_top_boost.value())
+                              top_gradient=self.chk_top_sky.isChecked(), top_boost=self.spin_top_boost.value(),
+                              lum_refine=self.chk_lum_refine.isChecked(),
+                              lum_thr=(self.spin_lum_thr.value() or None),
+                              edge_band=self.spin_edge_band.value())
         fg_w = self._meta.get("fg_w")
         # le ciel défini par l'utilisateur (avant-plan peint, sans marge) prime sur le modèle
         fg_raw = self._meta.get("fg_raw")

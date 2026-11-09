@@ -63,6 +63,9 @@ def run_pipeline(
     lp_top_boost: float = 0.5,
     lp_target: str = "median",
     lp_shared_shape: bool = True,
+    lp_lum_refine: bool = True,
+    lp_lum_thr: float | None = None,
+    lp_edge_band: int = 40,
     meta_out: dict | None = None,
     progress_cb=None,
     should_cancel=None,
@@ -247,7 +250,8 @@ def run_pipeline(
         try:
             # v1.1.3 : le masque PL reprend le réglage « Gradient Ciel favorisé » de l'interface
             sky_lp = auto_sky_weight(result, out_hw=wh, debug_cb=lambda m: cb(3, 0, 1, m),
-                                     top_gradient=lp_top_gradient, top_boost=lp_top_boost)
+                                     top_gradient=lp_top_gradient, top_boost=lp_top_boost,
+                                     lum_refine=lp_lum_refine, lum_thr=lp_lum_thr, edge_band=lp_edge_band)
             # le ciel défini par l'utilisateur (avant-plan peint) prime sur le modèle
             from .lpcorrect import combine_painted_sky
             sky_lp = combine_painted_sky(sky_lp, m_raw_painted if mask is not None else None)
