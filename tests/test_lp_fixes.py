@@ -42,6 +42,7 @@ if __name__ == "__main__":
     test_background_bounded_to_sky_range_in_corner()
     test_painted_foreground_removed_from_pl_sky()
     test_black_border_ignored_by_pl()
+    test_fit_exclusion_removes_cloud_bias()
     print("OK")
 
 
@@ -60,3 +61,19 @@ def test_black_border_ignored_by_pl():
     ok = slice(None), slice(40, None)
     assert np.abs(a[ok] - b[ok]).max() < 0.01 * 65535, "la bande noire a changé la correction du ciel"
     assert np.abs(b[:, :15]).max() < 1e-3, "la bande noire ne doit pas être modifiée"
+
+
+def test_fit_exclusion_removes_cloud_bias():
+    """Un nuage étendu biaise le fond ; la zone exclue du calcul doit annuler ce biais."""
+    H, W = 400, 500
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    true = 15000 + 4000 * (1 - yy / H)
+    img = np.stack([true] * 3, -1).astype(np.float32)
+    img[200:400, 100:400] += 3000  # nuage étendu : classé « ciel », pas rejeté par l'ajustement
+    sky = np.ones((H, W), np.float32)
+    excl = np.zeros((H, W), bool)
+    excl[200:400, 100:400] = True
+    err_plain = float(np.abs(estimate_background(img, sky)[..., 0] - true).mean())
+    err_excl = float(np.abs(estimate_background(img, sky, exclude=excl)[..., 0] - true).mean())
+    assert err_plain > 100, "le cas de test doit biaiser le fond sans exclusion"
+    assert err_excl < 0.1 * err_plain, f"exclusion inefficace : {err_plain:.0f} -> {err_excl:.0f}"

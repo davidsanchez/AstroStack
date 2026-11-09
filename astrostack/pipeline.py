@@ -66,6 +66,7 @@ def run_pipeline(
     lp_lum_refine: bool = True,
     lp_lum_thr: float | None = None,
     lp_edge_band: int = 40,
+    lp_fit_exclude=None,
     meta_out: dict | None = None,
     progress_cb=None,
     should_cancel=None,
@@ -282,6 +283,7 @@ def run_pipeline(
             result, sky_lp, strength=lp_strength, feather=lp_feather,
             return_background=True, debug_cb=lambda m: cb(3, 0, 1, m),
             shared_shape=lp_shared_shape, target=lp_target,
+            fit_exclude=(None if lp_fit_exclude is None else cv2.resize(np.asarray(lp_fit_exclude), (wh[1], wh[0]), interpolation=cv2.INTER_NEAREST) > 127),
         )
         cb(3, 1, 1, "Correction de la pollution lumineuse terminée.")
 

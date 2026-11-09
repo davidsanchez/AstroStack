@@ -479,6 +479,18 @@ class MainWindow(QMainWindow):
         btn_clear = QPushButton("Effacer")
         btn_clear.clicked.connect(lambda: self.mask_editor.clear_mask())
         row_tools.addWidget(btn_clear)
+        # v1.1.5 : zone à exclure du CALCUL de la PL (nuages) — la zone reste corrigée, elle ne
+        # sert qu'à estimer le fond. Distinct de l'avant-plan rouge, qui n'est jamais corrigé.
+        row_fit = QHBoxLayout()
+        self.chk_fit = QCheckBox("Exclure du calcul PL (bleu)")
+        self.chk_fit.setToolTip("Peint une zone en BLEU : elle n'est pas utilisée pour estimer le fond de pollution (ex. nuages lumineux). Elle reste corrigée comme le reste du ciel.")
+        self.chk_fit.toggled.connect(lambda v: setattr(self.mask_editor, "paint_fit", bool(v)))
+        row_fit.addWidget(self.chk_fit)
+        row_fit.addStretch(1)
+        btn_clear_fit = QPushButton("Effacer zone PL")
+        btn_clear_fit.clicked.connect(lambda: self.mask_editor.clear_fit_mask())
+        row_fit.addWidget(btn_clear_fit)
+        lay_mask.addLayout(row_fit)
 
 
         row_sky = QHBoxLayout()
@@ -1119,6 +1131,7 @@ class MainWindow(QMainWindow):
             lp_lum_refine=self.chk_lum_refine.isChecked(),  # v1.1.5 : mêmes réglages que le masque affiché
             lp_lum_thr=(self.spin_lum_thr.value() or None),
             lp_edge_band=self.spin_edge_band.value(),
+            lp_fit_exclude=self.mask_editor.get_fit_mask(),  # v1.1.5 : zone exclue du calcul PL (bleu)
             lp_target="dark" if self.combo_lp_target.currentIndex() == 1 else "median",  # v1.1.3
             lp_shared_shape=self.chk_lp_shared.isChecked(),  # v1.1.3
             lp_feather=self._lp_feather_value(),  # v0.8.15 : fondu PL réglable en UI (« auto » par défaut)
@@ -1212,8 +1225,13 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
         try:
             if self.chk_lp.isChecked():
+                fit_ex = self.mask_editor.get_fit_mask()
+                if fit_ex is not None:
+                    import cv2 as _cv2
+                    fit_ex = _cv2.resize(fit_ex, (img.shape[1], img.shape[0]), interpolation=_cv2.INTER_NEAREST) > 127
                 out = correct_light_pollution(
                     img, sky, strength=strength, feather=feather_v, debug_cb=self._log,
+                    fit_exclude=fit_ex,
                     shared_shape=self.chk_lp_shared.isChecked(),
                     target="dark" if self.combo_lp_target.currentIndex() == 1 else "median",
                 )

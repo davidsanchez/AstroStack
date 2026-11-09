@@ -110,7 +110,7 @@ def _robust_lstsq(X: np.ndarray, y: np.ndarray, iters: int = 4, k: float = 3.0) 
 
 
 def estimate_background(img: np.ndarray, sky_w: np.ndarray, deg: int = 3, max_small: int = 256,
-                        shared_shape: bool = False) -> np.ndarray | None:
+                        shared_shape: bool = False, exclude: np.ndarray | None = None) -> np.ndarray | None:
     """Fond de pollution HxWxC estimé sur le ciel, ou None si le ciel est insuffisant.
 
     v1.1.0 (défaut, shared_shape=False) : CORRECTION PAR CANAL — chaque canal (R, G, B) reçoit son
@@ -127,6 +127,9 @@ def estimate_background(img: np.ndarray, sky_w: np.ndarray, deg: int = 3, max_sm
     if small.ndim == 2:
         small = small[..., None]
     sky_small = cv2.resize(sky_w.astype(np.float32), (sw, sh), interpolation=cv2.INTER_AREA) >= 0.99
+    if exclude is not None:  # v1.1.5 : zone exclue du calcul (nuages) : jamais un échantillon du fond
+        ex_small = cv2.resize(np.asarray(exclude, dtype=np.float32), (sw, sh), interpolation=cv2.INTER_AREA) >= 0.5
+        sky_small = sky_small & ~ex_small
     # v1.1.4 : enveloppe basse par bloc. Un nuage est plus clair que le ciel voisin : dans chaque
     # bloc on ne garde que les pixels les plus sombres (30e percentile de luminance). Le gradient de
     # pollution, lent, est conservé ; la lueur des nuages n'attire plus le fond.
@@ -206,6 +209,7 @@ def correct_light_pollution(
     deg: int = 3,
     neutral: bool = True,
     shared_shape: bool = True,  # v1.1.3 : forme commune par défaut (évite la dominante bleue sous les nuages chauds)
+    fit_exclude: np.ndarray | None = None,  # v1.1.5 : zone exclue du calcul du fond (reste corrigée)
     target: str = "median",  # v1.1.3 : "median" (défaut, niveau médian conservé) ou "dark" (ciel le plus sombre conservé)
     return_background: bool = False,
     debug_cb=None,
@@ -227,7 +231,7 @@ def correct_light_pollution(
             debug_cb("PL : aucun ciel détecté, correction ignorée.")
         return (img, None) if return_background else img
 
-    bg = estimate_background(img, sky, deg=deg, shared_shape=shared_shape)
+    bg = estimate_background(img, sky, deg=deg, shared_shape=shared_shape, exclude=fit_exclude)
     if bg is None:
         if debug_cb:
             debug_cb("PL : ciel insuffisant pour estimer le fond, correction ignorée.")
