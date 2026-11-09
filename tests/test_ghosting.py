@@ -5,7 +5,8 @@
 Ciel stellaire + sol sombre et arbre. Chaque pose est recalée sur le ciel, mais le sol
 subit une PARALLAXE de quelques px : ses bords se retrouvent en fantôme dans le ciel
 voisin lorsque le rejet des pixels aberrants est trop faible. On vérifie que le rejet
-robuste (médiane + MAD) réduit nettement ce fantôme par rapport à une simple moyenne.
+robuste (médiane + MAD, mode="robust", opt-in) réduit nettement ce fantôme par rapport à
+une simple moyenne. Modèle trépied : sol et arbre FIXES en pixels, seul le ciel dérive.
 """
 from __future__ import annotations
 
@@ -57,24 +58,18 @@ def _warp(img, M):
 
 
 def make_poses(seed=0, n=5):
+    """Trépied : le ciel dérive d'une pose à l'autre, le sol et l'arbre restent fixes en pixels."""
     sky, fgm, fgl = make_scene(seed)
     rng = np.random.default_rng(seed + 11)
     frames = []
     for i in range(n):
-        tx, ty = (0.0, 0.0) if i == 0 else tuple(rng.uniform(-10, 10, 2))
-        rot = 0.0 if i == 0 else rng.uniform(-0.8, 0.8)
+        tx, ty = (0.0, 0.0) if i == 0 else tuple(rng.uniform(-6, 6, 2))
+        rot = 0.0 if i == 0 else rng.uniform(-0.4, 0.4)
         M = cv2.getRotationMatrix2D((W / 2, H / 2), rot, 1.0)
         M[0, 2] += tx
         M[1, 2] += ty
-        Mp = M.copy()  # le sol, plus proche, subit une parallaxe supplémentaire
-        if i:
-            Mp[0, 2] += 2.0
-            Mp[1, 2] += 1.0
         s_w = _warp(sky, M)
-        f_w = _warp(fgl, Mp)
-        m_w = cv2.warpAffine(fgm.astype(np.uint8) * 255, Mp, (W, H), flags=cv2.INTER_NEAREST,
-                             borderMode=cv2.BORDER_REFLECT) > 127
-        fr = np.where(m_w[..., None], f_w, s_w) + rng.normal(0, 40, (H, W, 3)).astype(np.float32) + 300
+        fr = np.where(fgm[..., None], fgl, s_w) + rng.normal(0, 40, (H, W, 3)).astype(np.float32) + 300
         frames.append(np.clip(fr, 0, 65535).astype(np.float32))
     return frames, sky, fgm, fgl
 
@@ -103,7 +98,7 @@ def main_check(seed=0):
         transforms.append(M)
     get = lambda i: frames[i]
     mean_out = stack_frames(get, transforms, fg_w, mode="mean")
-    robust_out = stack_frames(get, transforms, fg_w, mode="sigma", kappa=2.5)
+    robust_out = stack_frames(get, transforms, fg_w, mode="robust", kappa=2.5)
     g_mean = ghost_error(mean_out, sky, fgm, fgl)
     g_rob = ghost_error(robust_out, sky, fgm, fgl)
     print(f"fantôme (moyenne) : {g_mean:.1f}   fantôme (rejet robuste) : {g_rob:.1f}")

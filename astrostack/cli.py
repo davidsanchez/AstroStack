@@ -63,7 +63,8 @@ def main(argv=None) -> None:
         "(défaut 2000 ; 1200 avant) — plus grand = détails plus fins mais plus lent",
     )
     p.add_argument("--out", default="astrostack_result.tif")
-    p.add_argument("--mode", choices=["sigma", "mean"], default="sigma")
+    p.add_argument("--mode", choices=["sigma", "robust", "mean"], default="sigma",
+                   help="sigma (défaut) ; robust = rejet centré sur la médiane (expérimental) ; mean = moyenne simple")
     p.add_argument("--kappa", type=float, default=2.5)
     p.add_argument(
         "--no-ecc",

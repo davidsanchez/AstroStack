@@ -102,10 +102,9 @@ def stack_frames(
         if progress_cb:
             progress_cb(stage, i, n, msg)
 
-    # v0.9.1 : rejet robuste (médiane + MAD) quand toutes les poses tiennent en mémoire.
-    # Le rejet par moyenne/écart-type est gonflé par la pose aberrante elle-même (un arbre
-    # sombre parallaxé apparaît en fantôme) ; centrer sur la médiane le corrige.
-    if mode == "sigma" and n * h * w * 3 * 4 <= ROBUST_MAX_BYTES:
+    # v0.9.1 (opt-in, mode="robust") : rejet centré sur la médiane (MAD) quand toutes les poses
+    # tiennent en mémoire. Par défaut, "sigma" garde le rejet en flux d'origine.
+    if mode == "robust" and n * h * w * 3 * 4 <= ROBUST_MAX_BYTES:
         return _stack_robust(get_frame, transforms, fg_w, size, kappa, cb)
 
     # --- passe 1 : statistiques dans le ciel (avec poids de validité) + avant-plan ---
