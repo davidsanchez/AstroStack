@@ -479,18 +479,6 @@ class MainWindow(QMainWindow):
         btn_clear = QPushButton("Effacer")
         btn_clear.clicked.connect(lambda: self.mask_editor.clear_mask())
         row_tools.addWidget(btn_clear)
-        # v1.1.5 : zone à exclure du CALCUL de la PL (nuages) — la zone reste corrigée, elle ne
-        # sert qu'à estimer le fond. Distinct de l'avant-plan rouge, qui n'est jamais corrigé.
-        row_fit = QHBoxLayout()
-        self.chk_fit = QCheckBox("Exclure du calcul PL (bleu)")
-        self.chk_fit.setToolTip("Peint une zone en BLEU : elle n'est pas utilisée pour estimer le fond de pollution (ex. nuages lumineux). Elle reste corrigée comme le reste du ciel.")
-        self.chk_fit.toggled.connect(lambda v: setattr(self.mask_editor, "paint_fit", bool(v)))
-        row_fit.addWidget(self.chk_fit)
-        row_fit.addStretch(1)
-        btn_clear_fit = QPushButton("Effacer zone PL")
-        btn_clear_fit.clicked.connect(lambda: self.mask_editor.clear_fit_mask())
-        row_fit.addWidget(btn_clear_fit)
-        lay_mask.addLayout(row_fit)
 
 
         row_sky = QHBoxLayout()
@@ -660,6 +648,24 @@ class MainWindow(QMainWindow):
         row_lp3.addWidget(self.spin_lp_feather)
         lay_lp.addLayout(row_lp3)
         # v1.1.3 : cible du fond et forme commune (défauts : médiane + forme commune)
+        # v1.1.5 : zone à exclure du CALCUL de la PL (nuages), peinte en bleu. Décochée, le pinceau
+        # revient à l'avant-plan rouge (masque d'alignement). Ce n'est pas de l'avant-plan : la zone
+        # reste corrigée, elle ne sert qu'à estimer le fond.
+        row_fit = QHBoxLayout()
+        row_fit.setContentsMargins(0, 0, 0, 0)
+        self.chk_fit = QCheckBox("Peindre zone PL (bleu)")
+        self.chk_fit.setToolTip(
+            "Coché : le pinceau peint en BLEU une zone exclue du calcul de la PL (nuages lumineux). "
+            "Décoché : le pinceau revient à l'avant-plan rouge du masque d'alignement."
+        )
+        self.chk_fit.toggled.connect(lambda v: setattr(self.mask_editor, "paint_fit", bool(v)))
+        row_fit.addWidget(self.chk_fit)
+        row_fit.addStretch(1)
+        btn_reset_pl = QPushButton("Réinitialiser masque PL")
+        btn_reset_pl.setToolTip("Efface la zone bleue d'exclusion PL. Le masque d'alignement (rouge) n'est pas modifié.")
+        btn_reset_pl.clicked.connect(lambda: self.mask_editor.clear_fit_mask())
+        row_fit.addWidget(btn_reset_pl)
+        lay_lp.addLayout(row_fit)
         row_lp4 = QHBoxLayout()
         row_lp4.setContentsMargins(0, 0, 0, 0)
         row_lp4.addWidget(QLabel("Cible"))
