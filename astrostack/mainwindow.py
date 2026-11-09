@@ -908,8 +908,15 @@ class MainWindow(QMainWindow):
         btn.setCursor(Qt.PointingHandCursor)
         btn.setToolTip("Supprimer cette image de la liste")
         btn.clicked.connect(lambda _checked=False, it=item: self._remove_item(lst, backing, it))
+        # v1.2.0 : pastille verte sur la photo de référence (couleur fixée par _highlight_ref)
+        dot = QLabel("●")
+        dot.setObjectName("refdot")
+        dot.setToolTip("Image de référence")
+        dot.setStyleSheet("color: transparent; font-size: 13px;")
         lab = QLabel(os.path.basename(path))
+        lab.setObjectName("name")
         h.addWidget(btn)
+        h.addWidget(dot)
         h.addWidget(lab, 1)
         item.setSizeHint(w.sizeHint())
         lst.addItem(item)
@@ -946,12 +953,10 @@ class MainWindow(QMainWindow):
         import html as _html
         if name:
             self.lbl_ref.setTextFormat(Qt.RichText)
-            self.lbl_ref.setText(
-                '<span style="color:#3ddc84;font-size:14px;">●</span>&nbsp;'
-                f'Référence : {_html.escape(name)}')
+            self.lbl_ref.setText(f"Référence : {_html.escape(name)}")
         else:
             self.lbl_ref.setTextFormat(Qt.PlainText)
-            self.lbl_ref.setText("○  Référence : — (ajoutez des images)")
+            self.lbl_ref.setText("Référence : — (ajoutez des images)")
 
     def _clear_list(self, backing: list[str], lst: QListWidget) -> None:
         backing.clear()
@@ -993,11 +998,16 @@ class MainWindow(QMainWindow):
         for r in range(self.list_lights.count()):
             it = self.list_lights.item(r)
             w = self.list_lights.itemWidget(it)
-            lab = w.findChild(QLabel) if w is not None else None
+            if w is None:
+                continue
+            lab = w.findChild(QLabel, "name")
             if lab is not None:
                 f = lab.font()
                 f.setBold(r == idx)
                 lab.setFont(f)
+            dot = w.findChild(QLabel, "refdot")
+            if dot is not None:
+                dot.setStyleSheet("color: #3ddc84; font-size: 13px;" if r == idx else "color: transparent; font-size: 13px;")
 
     def _on_light_clicked(self, item) -> None:
         """Clic sur une image de la liste -> elle devient la RÉFÉRENCE (image de base)."""
