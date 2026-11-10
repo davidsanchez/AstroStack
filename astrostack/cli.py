@@ -86,6 +86,8 @@ def main(argv=None) -> None:
         "corrige la distorsion de l'objectif et les traînées dans les COINS de l'image",
     )
     p.add_argument("--scale", type=float, default=1.0, help="1.0 = pleine résolution, 0.5 = moitié…")
+    p.add_argument("--fast", action="store_true",
+                   help="mode Rapide (peut légèrement modifier le résultat ; défaut = Précis)")
     p.add_argument(
         "--ref-index",
         type=int,
@@ -115,7 +117,7 @@ def main(argv=None) -> None:
     )
     args = p.parse_args(argv)
 
-    if args.lp_redo:  # v0.8.4 : correction PL seule, sans empilement
+    if args.lp_redo:  # correction PL seule, sans empilement
         import os
 
         import imageio.v3 as iio
@@ -160,7 +162,7 @@ def main(argv=None) -> None:
 
         img = load_image_linear(lights[0]).astype(np.float32)
         h, w = img.shape[:2]
-        s = min(1.0, args.mask_max_side / max(h, w))  # v0.8.14 : résolution de travail réglable (défaut 2000 px)
+        s = min(1.0, args.mask_max_side / max(h, w))  # résolution de travail réglable (défaut 2000 px)
         if s < 1.0:
             img = cv2.resize(img, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
         from .imaging import tonemap_u16
@@ -169,10 +171,10 @@ def main(argv=None) -> None:
         if args.auto_mask == "ml":
             from .mlmask import sky_to_foreground_mask
 
-            mask = sky_to_foreground_mask(  # v0.8.11 : affinage luminance ; v0.8.12 : grow=0 ; v0.8.14 : bord luminance + bande
+            mask = sky_to_foreground_mask(  # affinage luminance ; grow=0 ; bord luminance + bande
                 u8, grow=0, lum_refine=not args.no_mask_lum, lum_thr=(args.mask_lum_thr or None),
                 lum_edge=args.mask_edge_band > 0, edge_band=args.mask_edge_band,
-                guided=not args.no_mask_guided,  # v0.9.0 : filtre guidé pleine résolution (détails fins)
+                guided=not args.no_mask_guided,  # filtre guidé pleine résolution (détails fins)
             )
         else:
             lum = (0.2126 * u8[..., 0] + 0.7152 * u8[..., 1] + 0.0722 * u8[..., 2]).astype(np.uint8)
@@ -200,6 +202,7 @@ def main(argv=None) -> None:
         lp_feather=args.lp_feather,
         stack_grow=args.stack_grow,
         progress_cb=cb,
+        fast=args.fast,
     )
     print("Terminé :", args.out)
 

@@ -6,6 +6,7 @@ Fonction unique `run_pipeline`, utilisée par l'interface graphique (Qt) et par 
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -35,7 +36,7 @@ def _save_result(out_path: str, result_f32: np.ndarray, fg_w: np.ndarray, fg_bas
     iio.imwrite(preview_path, tonemap_u16(result_f32))
     mask_path = base + "_mask.png"
     if fg_base is not None:
-        # v1.2.0 : base (masque ONNX / peint) en BLANC, extension par dilatation en ORANGE, ciel en noir
+        # base (masque ONNX / peint) en BLANC, extension par dilatation en ORANGE, ciel en noir
         base_b = np.asarray(fg_base) > 127
         full_b = np.asarray(fg_w) > 0.5
         rgb = np.zeros(full_b.shape + (3,), np.uint8)
@@ -79,6 +80,7 @@ def run_pipeline(
     meta_out: dict | None = None,
     progress_cb=None,
     should_cancel=None,
+    fast: bool = False,
 ) -> np.ndarray:
     """Exécute tout le pipeline. Retourne l'image résultat float32 HxWx3 (0..65535).
 
@@ -108,6 +110,9 @@ def run_pipeline(
                   refaire l'empilement.
     progress_cb : callback(stage:int, i:int, n:int, msg:str).
     should_cancel : callback() -> bool ; si True, lève CancelledError (annulation douce).
+    fast        : mode « Rapide » (False = « Précis », défaut). Peut modifier légèrement le
+                  résultat : RAW décodés à demi-taille si scale <= 50 %, pas de recalcul des
+                  poses en sigma clipping, arithmétique allégée.
     """
 
     def cb(stage, i, n, msg=""):
@@ -124,11 +129,6 @@ def run_pipeline(
 
     # --- image de référence (lights[ref_index]) ---
     cb(0, 0, len(lights), f"Chargement de la référence ({os.path.basename(ref_path)})…")
-    try:
-        ref_shape = load_image_linear(ref_path).shape[:2]
-    except Exception as exc:
-        raise RuntimeError(f"Impossible de lire la référence {ref_path} : {exc}") from exc
-
     # --- masters de calibration ---
     # Si la référence et tous les fichiers de calibration sont des RAW :
     # on calibre SUR LE BAYER BRUT (dark/bias/flat avant dématriçage) — plus correct.
@@ -137,6 +137,17 @@ def run_pipeline(
     use_bayer = is_raw(ref_path) and all(is_raw(p) for p in calib_files)
     master_dark = master_bias = master_flat = None
     bayer_dark = bayer_bias = bayer_flat = None
+    # mode rapide : RAW à demi-taille quand la résolution de travail est <= 50 %
+    # (seul le décodage RAW sait produire la demi-taille ; TIFF/PNG restent pleine taille)
+    half = bool(fast) and scale <= 0.5 and is_raw(ref_path)
+    ref_pre = None  # référence décodée UNE seule fois (calibration post-dématriçage)
+    ref_shape = None
+    if not use_bayer:
+        try:
+            ref_pre = load_image_linear(ref_path, half=half)
+        except Exception as exc:
+            raise RuntimeError(f"Impossible de lire la référence {ref_path} : {exc}") from exc
+        ref_shape = ref_pre.shape[:2]
     if use_bayer:
         target = load_bayer(ref_path)[0].shape  # taille du Bayer de la référence
         if darks:
@@ -154,16 +165,22 @@ def run_pipeline(
     def load_light(path: str) -> np.ndarray:
         """Charge une light calibrée (Bayer si possible, sinon RGB post-dématriçage)."""
         if use_bayer:
-            img = load_raw_calibrated_bayer(path, bayer_dark, bayer_bias, bayer_flat)
+            img = load_raw_calibrated_bayer(path, bayer_dark, bayer_bias, bayer_flat, half=half)
             if img is not None:
                 return img
             # repli : calibration post-dématriçage
-        return calibrate(load_image_linear(path), master_dark, master_bias, master_flat)
+        return calibrate(load_image_linear(path, half=half), master_dark, master_bias, master_flat)
 
-    ref = load_light(ref_path).astype(np.float32)
+    if ref_pre is not None:
+        ref = np.asarray(calibrate(ref_pre, master_dark, master_bias, master_flat), dtype=np.float32)
+        del ref_pre
+    else:
+        ref = np.asarray(load_light(ref_path), dtype=np.float32)
     h, w = ref.shape[:2]
-    if scale != 1.0:
-        nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+    if half:  # décodé à demi-taille : dimensions pleine résolution = double
+        h, w = 2 * h, 2 * w
+    nh, nw = max(1, int(h * scale)), max(1, int(w * scale))
+    if ref.shape[:2] != (nh, nw):
         ref = cv2.resize(ref, (nw, nh), interpolation=cv2.INTER_AREA)
     wh = ref.shape[:2]
 
@@ -173,17 +190,17 @@ def run_pipeline(
         if mask.ndim == 3:  # masque RGB -> on prend un canal
             mask = mask[..., 0]
         m = cv2.resize(mask, (wh[1], wh[0]), interpolation=cv2.INTER_NEAREST)
-        # v1.1.1 : les petits îlots (étoiles détectées comme avant-plan) restent fixes à l'empilement
+        # les petits îlots (étoiles détectées comme avant-plan) restent fixes à l'empilement
         from .mlmask import drop_small_islands
         m = drop_small_islands(m)
-        m_raw_painted = m.copy()  # v1.1.4 : masque peint sans dilatation ni fondu, pour la PL
+        m_raw_painted = m.copy()  # masque peint sans dilatation ni fondu, pour la PL
         # marge de sécurité : on dilate l'avant-plan de ~0,5 % (min 3 px) pour que le bord
         # du masque — et son fondu — tombent DANS LE CIEL, jamais sur l'avant-plan
         # (sinon les pixels d'avant-plan au bord du masque seraient warpés = fantômes)
         k = max(3, int(round(min(wh) * 0.005))) | 1
         m = cv2.dilate(m, np.ones((k, k), np.uint8))
         fg_w = feather(m, sigma=max(2.0, min(wh) * 0.004))
-        # v0.9.2 : marge de stacking (2 px par défaut) — elle ne sert QU'À l'empilement :
+        # marge de stacking (2 px par défaut) — elle ne sert QU'À l'empilement :
         # ni dans le masque affiché/exporté (fg_w), ni dans la correction de pollution lumineuse.
         if stack_grow > 0:
             m_stack = cv2.dilate(m, np.ones((3, 3), np.uint8), iterations=int(stack_grow))
@@ -199,22 +216,42 @@ def run_pipeline(
     cache: dict[int, np.ndarray] = {}
     CACHE_MAX_BYTES = 2_500_000_000  # ~2.5 Go de frames calibrées en RAM
     cache_bytes = 0
+    # v1.2.1 : la référence est déjà calibrée et à la bonne taille : pas de second décodage
+    cache[ref_index] = ref
+    cache_bytes = ref.nbytes
+    # v1.2.1 : lecture de l'image suivante en arrière-plan (lecture disque / décodage RAW)
+    loader = ThreadPoolExecutor(max_workers=2)
+    pending: dict[int, object] = {}
 
-    def get_frame(i: int) -> np.ndarray:
-        nonlocal cache_bytes
-        if i in cache:
-            return cache[i]
-        cb(1, i, n, f"Calibration {os.path.basename(lights[i])}")
+    def _load_work(i: int) -> np.ndarray:
         try:
-            img = load_light(lights[i]).astype(np.float32)
+            img = np.asarray(load_light(lights[i]), dtype=np.float32)
         except Exception as exc:
             raise RuntimeError(f"Impossible de lire {lights[i]} : {exc}") from exc
         if img.shape[:2] != wh:  # tailles différentes (autre appareil, JPEG, etc.) -> on redimensionne
             img = cv2.resize(img, (wh[1], wh[0]), interpolation=cv2.INTER_AREA)
+        return img
+
+    def prefetch(i: int) -> None:
+        if (0 <= i < n and i not in cache and i not in pending and len(pending) < 2
+                and cache_bytes < CACHE_MAX_BYTES):
+            pending[i] = loader.submit(_load_work, i)
+
+    def _get_frame(i: int) -> np.ndarray:
+        nonlocal cache_bytes
+        if i in cache:
+            return cache[i]
+        cb(1, i, n, f"Calibration {os.path.basename(lights[i])}")
+        fut = pending.pop(i, None)
+        img = fut.result() if fut is not None else _load_work(i)
         if cache_bytes < CACHE_MAX_BYTES:
             cache[i] = img
             cache_bytes += img.nbytes
         return img
+
+    def get_frame(i: int) -> np.ndarray:
+        prefetch(i + 1)  # l'image suivante se lit pendant le calcul de celle-ci
+        return _get_frame(i)
 
     # --- alignement de chaque light sur la référence (phase + étoiles + homographie + ECC + TPS) ---
     ref_gray = luminance(ref)
@@ -241,38 +278,40 @@ def run_pipeline(
         )
 
     # --- empilement ---
-    result = stack_frames(get_frame, transforms, fg_stack, mode=mode, kappa=kappa, progress_cb=cb)
-    if meta_out is not None:  # v0.8.4 : données pour réappliquer la PL sans re-stacker
+    try:
+        result = stack_frames(get_frame, transforms, fg_stack, mode=mode, kappa=kappa, progress_cb=cb,
+                              fast=bool(fast))
+    finally:
+        loader.shutdown(wait=False, cancel_futures=True)
+    if meta_out is not None:  # données pour réappliquer la PL sans re-stacker
         meta_out["stack_raw"] = result
         meta_out["sky"] = sky
         meta_out["fg_w"] = fg_w
         meta_out["work_shape"] = wh
 
     # --- correction de la pollution lumineuse (linéaire, post-empilement) ---
-    # v1.0.0 : le ciel vient du MASQUE AUTOMATIQUE calculé sur le stack (géométrie de référence).
+    # le ciel vient du MASQUE AUTOMATIQUE calculé sur le stack (géométrie de référence).
     lp_bg = None
     if lp_correct:
         if should_cancel is not None and should_cancel():
             raise CancelledError("Annulation demandée par l'utilisateur.")
-        from .lpcorrect import auto_sky_weight, correct_light_pollution
+        from .lpcorrect import correct_light_pollution, pl_sky_mask
 
         cb(3, 0, 1, f"Correction de la pollution lumineuse — force {lp_strength:.0%}, ciel détecté par le masque automatique…")
         try:
-            # v1.1.3 : le masque PL reprend le réglage « Gradient Ciel favorisé » de l'interface
-            # v1.1.6 : le masque PL est calculé sur la RÉFÉRENCE (comme le masque affiché), pas sur le stack :
+            # le masque PL reprend le réglage « Gradient Ciel favorisé » de l'interface
+            # le masque PL est calculé sur la RÉFÉRENCE (comme le masque affiché), pas sur le stack :
             # l'affinage luminance (seuil Otsu) donnait sinon des îlots sombres dans le ciel du stack.
-            sky_lp = auto_sky_weight(ref, out_hw=wh, debug_cb=lambda m: cb(3, 0, 1, m),
-                                     top_gradient=lp_top_gradient, top_boost=lp_top_boost,
-                                     lum_refine=lp_lum_refine, lum_thr=lp_lum_thr, edge_band=lp_edge_band)
-            # le ciel défini par l'utilisateur (avant-plan peint) prime sur le modèle
-            from .lpcorrect import combine_painted_sky
-            sky_lp = combine_painted_sky(sky_lp, m_raw_painted if mask is not None else None)
+            sky_lp = pl_sky_mask(ref, wh, m_raw_painted if mask is not None else None,
+                                 top_gradient=lp_top_gradient, top_boost=lp_top_boost,
+                                 lum_refine=lp_lum_refine, lum_thr=lp_lum_thr, edge_band=lp_edge_band,
+                                 debug_cb=lambda m: cb(3, 0, 1, m))
         except ImportError as exc:
-            raise RuntimeError("La détection du ciel a besoin de onnxruntime : pip install onnxruntime") from exc
+            raise RuntimeError(f"Détection du ciel : {exc}") from exc
         if meta_out is not None:
             meta_out["sky_lp"] = sky_lp
             meta_out["ref_path"] = lights[ref_index]
-            meta_out["fg_raw"] = m_raw_painted if mask is not None else None  # v1.1.4 : pour « Réappliquer la PL »
+            meta_out["fg_raw"] = m_raw_painted if mask is not None else None  # pour « Réappliquer la PL »
         if out_path:
             base, ext = os.path.splitext(out_path)
             try:  # diagnostic : masque ciel utilisé
@@ -299,7 +338,7 @@ def run_pipeline(
     if out_path:
         paths = _save_result(out_path, result, fg_w, fg_base=(m_raw_painted if mask is not None else None))
         cb(4, n, n, f"Écrit : {paths['tif']}")
-        if lp_correct and lp_bg is not None:  # v0.9.3 : fond de pollution estimé, étiré pour l'œil
+        if lp_correct and lp_bg is not None:  # fond de pollution estimé, étiré pour l'œil
             import imageio.v3 as iio
 
             base0, _ = os.path.splitext(out_path)

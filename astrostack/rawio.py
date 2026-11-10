@@ -29,11 +29,13 @@ def srgb_to_linear(c: np.ndarray) -> np.ndarray:
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 
-def load_raw_linear(path: str) -> np.ndarray:
+def load_raw_linear(path: str, half: bool = False) -> np.ndarray:
     """Charge un fichier RAW et le dématricise en RGB linéaire 16 bits (uint16 HxWx3).
 
     gamma=(1,1) + no_auto_bright => pas de courbe de gamma : on reste en linéaire,
     ce qui est important pour moyenner correctement les poses.
+    half=True : dématriçage à demi-taille (un pixel RGB par quadruplet du Bayer), plus rapide
+    mais moins de détail ; réservé au mode « Rapide ».
     """
     import rawpy  # import tardif : pas besoin de rawpy pour les tests unitaires
 
@@ -46,6 +48,7 @@ def load_raw_linear(path: str) -> np.ndarray:
             gamma=(1.0, 1.0),  # linéaire
             bright=1.0,
             output_color=rawpy.ColorSpace.sRGB,
+            half_size=half,
         )
         try:
             rgb = raw.postprocess(dcb_enhance=False, **kwargs)
@@ -78,11 +81,12 @@ def load_std_linear(path: str) -> np.ndarray:
     return (lin * 65535.0).astype(np.uint16)
 
 
-def load_image_linear(path: str) -> np.ndarray:
-    """Charge n'importe quelle image supportée en RGB linéaire 16 bits."""
+def load_image_linear(path: str, half: bool = False) -> np.ndarray:
+    """Charge n'importe quelle image supportée en RGB linéaire 16 bits.
+    half : demi-taille (RAW seulement ; sans effet sur TIFF/PNG/JPEG)."""
     ext = os.path.splitext(path)[1].lower()
     if ext in RAW_EXTS:
-        return load_raw_linear(path)
+        return load_raw_linear(path, half=half)
     return load_std_linear(path)
 
 
@@ -137,7 +141,7 @@ def build_bayer_master(paths: list[str], kind: str, target_shape=None, progress_
     return acc / len(paths), pattern, black
 
 
-def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_flat=None):
+def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_flat=None, half=False):
     """Charge un RAW, calibre SUR LE BAYER (dark / bias / flat soustraits avant
     dématriçage), puis dématrice -> RGB linéaire 16 bits (uint16 HxWx3).
 
@@ -151,7 +155,7 @@ def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_f
     import rawpy
 
     if master_dark is None and master_bias is None and master_flat is None:
-        return load_raw_linear(path)
+        return load_raw_linear(path, half=half)
 
     with rawpy.imread(path) as raw:
         vis = raw.raw_image_visible
@@ -204,6 +208,7 @@ def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_f
             gamma=(1.0, 1.0),
             bright=1.0,
             output_color=rawpy.ColorSpace.sRGB,
+            half_size=half,
         )
         try:
             rgb = raw.postprocess(dcb_enhance=False, **kwargs)
@@ -256,7 +261,7 @@ def calibrate(
     soustraire le dark sur le Bayer brut (raw.raw_image_visible) avant dématriçage.
     Les darks doivent être pris à ISO/exposition/température proches des lights.
     """
-    x = img_u16.astype(np.float32)
+    x = np.asarray(img_u16, dtype=np.float32)  # copie seulement si le type change
     shape = x.shape[:2]
     if master_bias is not None:
         x -= _resize_like(master_bias, shape)
@@ -268,4 +273,5 @@ def calibrate(
         f = _resize_like(master_flat, shape)
         f = f / max(float(f.mean()), 1e-6)
         x /= np.maximum(f, 1e-3)
-    return np.clip(x, 0.0, 65535.0)
+    np.clip(x, 0.0, 65535.0, out=x)  # en place : pas de tableau supplémentaire
+    return x
