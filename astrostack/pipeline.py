@@ -6,6 +6,7 @@ Fonction unique `run_pipeline`, utilisée par l'interface graphique (Qt) et par 
 from __future__ import annotations
 
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import cv2
@@ -162,13 +163,30 @@ def run_pipeline(
         master_bias = build_master(biases or [], "bias", cb, target_shape=ref_shape)
         master_flat = build_master(flats or [], "flat", cb, target_shape=ref_shape)
 
+    # masters post-dématriçage, construits à la demande uniquement si le repli en a besoin
+    # (chemin Bayer dont l'écriture in-place a échoué) : sans eux, l'image n'était pas calibrée
+    fallback_lock = threading.Lock()
+    fallback_masters: list = []
+
+    def _fallback_masters():
+        with fallback_lock:
+            if not fallback_masters:
+                fallback_masters.append((
+                    build_master(darks or [], "dark"),
+                    build_master(biases or [], "bias"),
+                    build_master(flats or [], "flat"),
+                ))
+            return fallback_masters[0]
+
     def load_light(path: str) -> np.ndarray:
         """Charge une light calibrée (Bayer si possible, sinon RGB post-dématriçage)."""
         if use_bayer:
             img = load_raw_calibrated_bayer(path, bayer_dark, bayer_bias, bayer_flat, half=half)
             if img is not None:
                 return img
-            # repli : calibration post-dématriçage
+            # repli : calibration post-dématriçage avec les masters RGB
+            md, mb, mf = _fallback_masters()
+            return calibrate(load_image_linear(path, half=half), md, mb, mf)
         return calibrate(load_image_linear(path, half=half), master_dark, master_bias, master_flat)
 
     if ref_pre is not None:
