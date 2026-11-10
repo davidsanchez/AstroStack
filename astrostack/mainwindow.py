@@ -481,7 +481,6 @@ class MainWindow(QMainWindow):
         row_tools.addWidget(self.chk_erase)
         row_tools.addStretch(1)
         lay_mask.addLayout(row_tools)
-        #row_tools2 = QHBoxLayout()
         btn_inv = QPushButton("Inverser")
         btn_inv.setToolTip("Inverse le masque : peint ↔ non peint")
         btn_inv.clicked.connect(lambda: self.mask_editor.invert_mask())
@@ -1196,14 +1195,16 @@ class MainWindow(QMainWindow):
         if not self.mask_editor.has_image():
             QMessageBox.warning(self, "Masque ML", "L'aperçu de la référence n'est pas chargé (ajoutez des lights).")
             return
+        from .mlmask import require_onnxruntime
+
         try:
-            import onnxruntime  # noqa: F401
+            require_onnxruntime()
         except ImportError:
             QMessageBox.information(
                 self,
                 "Masque ML",
                 "Le masque ML a besoin de onnxruntime :\n\n    pip install onnxruntime\n\n"
-                "Relancez ensuite. Le masque par seuil (bouton « Auto (seuil) ») reste disponible.",
+                "Relancez ensuite.",
             )
             return
         from .imaging import tonemap_u16

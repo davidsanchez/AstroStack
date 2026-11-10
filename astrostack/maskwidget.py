@@ -12,7 +12,6 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
-from .preview import qimage_to_u8_rgb
 from .zoomview import ZoomMixin
 
 
@@ -104,26 +103,6 @@ class MaskEditor(ZoomMixin, QWidget):
             self._margin_cache = None
             self._invalidate("red", "orange")
             self.update()
-
-    def auto_threshold(self, thr: int) -> None:
-        """Masque auto heuristique : avant-plan = pixels plus sombres que `thr` (0..255).
-
-        C'est un point de départ (équivalent manuel du masque ML de SharpStacker) ;
-        l'utilisateur affine ensuite au pinceau."""
-        if self._qimg is None:
-            return
-        arr = qimage_to_u8_rgb(self._qimg)
-        lum = (0.2126 * arr[..., 0] + 0.7152 * arr[..., 1] + 0.0722 * arr[..., 2]).astype(np.uint8)
-        m = np.where(lum <= thr, 255, 0).astype(np.uint8)
-        k = np.ones((5, 5), np.uint8)
-        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, k)
-        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k)
-        # bords adoucis (le pipeline floute de toute façon pour le fondu)
-        mf = cv2.GaussianBlur(m.astype(np.float32), (5, 5), 0)
-        self._mask = np.where(mf > 127, 255, 0).astype(np.uint8)
-        self._margin_cache = None
-        self._invalidate("red", "orange")
-        self.update()
 
     # --- peinture ---
     def _img_pos(self, ev) -> tuple[int, int] | None:

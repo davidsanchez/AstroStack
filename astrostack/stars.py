@@ -118,11 +118,6 @@ def _to3(M: np.ndarray) -> np.ndarray:
     return A
 
 
-def compose(M_outer: np.ndarray, M_inner: np.ndarray) -> np.ndarray:
-    """Composition de deux transformations (2x3 ou 3x3) -> 3x3 : M_outer ∘ M_inner."""
-    return _to3(M_outer) @ _to3(M_inner)
-
-
 def phase_translation(ref_gray: np.ndarray, gray: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, float]:
     """Translation grossière frame -> référence par corrélation de phase fenêtrée.
 
