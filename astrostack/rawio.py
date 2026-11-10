@@ -31,7 +31,42 @@ def srgb_to_linear(c: np.ndarray) -> np.ndarray:
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 
-def load_raw_linear(path: str, half: bool = False, chrono=None) -> np.ndarray:
+DEMOSAIC_CHOICES = ("auto", "ahd", "ppg", "linear")
+_DEMOSAIC_NAMES = {"ahd": "AHD", "ppg": "PPG", "linear": "LINEAR"}
+
+
+def _demosaic_label(demosaic: str | None) -> str:
+    return _DEMOSAIC_NAMES.get(demosaic, "AHD (défaut)") if demosaic else "AHD (défaut)"
+
+
+def _postprocess(raw, kwargs: dict, demosaic: str | None):
+    """postprocess LibRaw. demosaic : None = défaut LibRaw (AHD), sinon 'ahd' | 'ppg' | 'linear'."""
+    import rawpy
+
+    extra = {}
+    if demosaic:
+        extra["demosaic_algorithm"] = getattr(rawpy.DemosaicAlgorithm, _DEMOSAIC_NAMES[demosaic])
+    try:
+        return raw.postprocess(dcb_enhance=False, **kwargs, **extra)
+    except TypeError:  # anciennes versions de rawpy sans dcb_enhance
+        return raw.postprocess(**kwargs, **extra)
+
+
+def _map_ordered(fn, items, workers: int):
+    """fn(item) pour chaque élément, résultats dans l'ordre. Par lots de `workers` threads :
+    au plus `workers` résultats sont gardés en mémoire à la fois."""
+    if workers <= 1 or len(items) <= 1:
+        for it in items:
+            yield fn(it)
+        return
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for start in range(0, len(items), workers):
+            yield from ex.map(fn, items[start:start + workers])
+
+
+def load_raw_linear(path: str, half: bool = False, chrono=None, demosaic: str | None = None) -> np.ndarray:
     """Charge un fichier RAW et le dématricise en RGB linéaire 16 bits (uint16 HxWx3).
 
     gamma=(1,1) + no_auto_bright => pas de courbe de gamma : on reste en linéaire,
@@ -54,11 +89,8 @@ def load_raw_linear(path: str, half: bool = False, chrono=None) -> np.ndarray:
             output_color=rawpy.ColorSpace.sRGB,
             half_size=half,
         )
-        try:
-            rgb = raw.postprocess(dcb_enhance=False, **kwargs)
-        except TypeError:  # anciennes versions de rawpy sans dcb_enhance
-            rgb = raw.postprocess(**kwargs)
-        lap.mark("dématriçage LibRaw")
+        rgb = _postprocess(raw, kwargs, demosaic)
+        lap.mark(f"dématriçage LibRaw ({_demosaic_label(demosaic)})")
     out = np.ascontiguousarray(rgb, dtype=np.uint16)
     lap.mark("mise en forme RGB")
     return out
@@ -88,12 +120,12 @@ def load_std_linear(path: str) -> np.ndarray:
     return (lin * 65535.0).astype(np.uint16)
 
 
-def load_image_linear(path: str, half: bool = False, chrono=None) -> np.ndarray:
+def load_image_linear(path: str, half: bool = False, chrono=None, demosaic: str | None = None) -> np.ndarray:
     """Charge n'importe quelle image supportée en RGB linéaire 16 bits.
     half : demi-taille (RAW seulement ; sans effet sur TIFF/PNG/JPEG)."""
     ext = os.path.splitext(path)[1].lower()
     if ext in RAW_EXTS:
-        return load_raw_linear(path, half=half, chrono=chrono)
+        return load_raw_linear(path, half=half, chrono=chrono, demosaic=demosaic)
     with measure(chrono, "lecture TIFF/PNG"):
         return load_std_linear(path)
 
@@ -127,7 +159,7 @@ def _black_full(pattern: np.ndarray, black: np.ndarray, shape: tuple[int, int]) 
     return np.tile(m, reps)[: shape[0], : shape[1]].astype(np.float32)
 
 
-def build_bayer_master(paths: list[str], kind: str, target_shape=None, progress_cb=None):
+def build_bayer_master(paths: list[str], kind: str, target_shape=None, progress_cb=None, workers: int = 1):
     """Moyenne de plusieurs Bayers bruts -> (master float32 HxW, pattern, black).
 
     Toutes les images sont redimensionnées sur target_shape si besoin.
@@ -136,20 +168,24 @@ def build_bayer_master(paths: list[str], kind: str, target_shape=None, progress_
         return None
     import cv2
 
-    acc = None
-    pattern = black = None
-    for i, p in enumerate(paths):
-        if progress_cb:
-            progress_cb(0, i, len(paths), f"Master {kind} (Bayer brut) : {os.path.basename(p)}")
+    def _one(p):
         bayer, pat, blk, _ = load_bayer(p)
         if target_shape is not None and bayer.shape != tuple(target_shape):
             bayer = cv2.resize(bayer, (target_shape[1], target_shape[0]), interpolation=cv2.INTER_AREA)
-        acc = bayer.astype(np.float32) if acc is None else acc + bayer
+        return bayer, pat, blk
+
+    acc = None
+    pattern = black = None
+    for i, (bayer, pat, blk) in enumerate(_map_ordered(_one, paths, workers)):
+        if progress_cb:
+            progress_cb(0, i, len(paths), f"Master {kind} (Bayer brut) : {os.path.basename(paths[i])}")
+        acc = bayer.astype(np.float32) if acc is None else acc + bayer  # même ordre que la version séquentielle
         pattern, black = pat, blk
     return acc / len(paths), pattern, black
 
 
-def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_flat=None, half=False, chrono=None):
+def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_flat=None, half=False, chrono=None,
+                              demosaic: str | None = None):
     """Charge un RAW, calibre SUR LE BAYER (dark / bias / flat soustraits avant
     dématriçage), puis dématrice -> RGB linéaire 16 bits (uint16 HxWx3).
 
@@ -163,7 +199,7 @@ def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_f
     import rawpy
 
     if master_dark is None and master_bias is None and master_flat is None:
-        return load_raw_linear(path, half=half, chrono=chrono)
+        return load_raw_linear(path, half=half, chrono=chrono, demosaic=demosaic)
 
     lap = Lap(chrono)
     with rawpy.imread(path) as raw:
@@ -221,11 +257,8 @@ def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_f
             output_color=rawpy.ColorSpace.sRGB,
             half_size=half,
         )
-        try:
-            rgb = raw.postprocess(dcb_enhance=False, **kwargs)
-        except TypeError:
-            rgb = raw.postprocess(**kwargs)
-        lap.mark("dématriçage LibRaw")
+        rgb = _postprocess(raw, kwargs, demosaic)
+        lap.mark(f"dématriçage LibRaw ({_demosaic_label(demosaic)})")
     out = np.ascontiguousarray(rgb, dtype=np.uint16)
     lap.mark("mise en forme RGB")
     return out
@@ -239,7 +272,7 @@ def _resize_like(img: np.ndarray, ref_shape: tuple[int, int]) -> np.ndarray:
     return img
 
 
-def build_master(paths: list[str], label: str = "", progress_cb=None, target_shape=None) -> np.ndarray | None:
+def build_master(paths: list[str], label: str = "", progress_cb=None, target_shape=None, workers: int = 1) -> np.ndarray | None:
     """Moyenne de plusieurs images (dark / flat / bias) -> master float32 HxWx3.
 
     Toutes les images sont redimensionnées sur `target_shape` (ou sur la 1ère image si
@@ -251,10 +284,9 @@ def build_master(paths: list[str], label: str = "", progress_cb=None, target_sha
 
     acc = None
     ref_shape = target_shape
-    for i, p in enumerate(paths):
+    for i, img in enumerate(_map_ordered(lambda p: load_image_linear(p).astype(np.float32), paths, workers)):
         if progress_cb:
-            progress_cb(0, i, len(paths), f"Master {label or 'calibration'} : {os.path.basename(p)}")
-        img = load_image_linear(p).astype(np.float32)
+            progress_cb(0, i, len(paths), f"Master {label or 'calibration'} : {os.path.basename(paths[i])}")
         if ref_shape is None:
             ref_shape = img.shape[:2]
         if img.shape[:2] != tuple(ref_shape):

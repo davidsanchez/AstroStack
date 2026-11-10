@@ -529,6 +529,25 @@ class MainWindow(QMainWindow):
             "d'étoiles dans les coins. Désactivez si une pose pose problème.")
         )
         form.addRow(self.chk_local)
+        # performances (mode expert) : algorithme de dématriçage et lectures RAW en parallèle
+        self.combo_demosaic = QComboBox()
+        self.combo_demosaic.setMinimumWidth(0)
+        self.combo_demosaic.addItems([t("Auto"), "AHD", "PPG", t("Linéaire")])
+        self.combo_demosaic.setToolTip(
+            t("Algorithme de dématriçage des RAW. Auto : AHD en Précis, PPG en Rapide. "
+              "Linéaire est le plus rapide mais le moins détaillé.")
+        )
+        form.addRow(t("Dématriçage"), self.combo_demosaic)
+        self.spin_threads = QSpinBox()
+        self.spin_threads.setRange(1, 6)
+        self.spin_threads.setValue(2)
+        self.spin_threads.setMaximumWidth(90)
+        self.spin_threads.setToolTip(
+            t("Nombre de RAW lus en parallèle. Ne change pas le résultat, mais consomme plus de mémoire.")
+        )
+        form.addRow(t("Lectures parallèles"), self.spin_threads)
+        self._expert_mask += [form.labelForField(self.combo_demosaic), self.combo_demosaic,
+                              form.labelForField(self.spin_threads), self.spin_threads]
         box_opt.addLayout(form)
         left.addWidget(box_opt)
 
@@ -1228,6 +1247,8 @@ class MainWindow(QMainWindow):
             stack_grow=self.spin_stack_grow.value(),  # marge d'empilement (px)
             meta_out=self._meta,   # sky/fg_w/stack_raw pour réappliquer la PL
             fast=self.btn_speed.isChecked(),  # Précis / Rapide
+            load_threads=self.spin_threads.value(),
+            demosaic=["auto", "ahd", "ppg", "linear"][self.combo_demosaic.currentIndex()],
         )
         self.btn_run.setEnabled(False)
         self.btn_stop.setEnabled(True)
