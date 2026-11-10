@@ -325,7 +325,7 @@ class MainWindow(QMainWindow):
         left.setContentsMargins(4, 4, 4, 4)
         left.setSpacing(3)
 
-        box_img = CollapsibleBox("Images", checked=True)   # ouvertes par défaut
+        box_img = CollapsibleBox(t("Images"), checked=True)   # ouvertes par défaut
         box_dark = CollapsibleBox(t("Darks (optionnel)"), checked=False)   # ouvertes par défaut
         box_flat = CollapsibleBox(t("Flats (optionnel)"), checked=False)  # repliées
         box_bias = CollapsibleBox(t("Bias (optionnel)"), checked=False)   # repliées
@@ -357,12 +357,12 @@ class MainWindow(QMainWindow):
         self.lbl_ref.setStyleSheet("color: #9ecbff; font-weight: 600;")
         self.lbl_ref.setToolTip(t("Image de base utilisée pour l'alignement et l'aperçu : c'est l'image du MILIEU de la liste (modifiable en CLI avec --ref-index N)."))
         lay_mask.addWidget(self.lbl_ref)
-        btn_mask = QPushButton("Recharger")
+        btn_mask = QPushButton(t("Recharger"))
         btn_mask.setToolTip(t("Recharge l'image de référence (celle choisie dans la liste, ou l'image du milieu). Le masque peint est effacé."))
         btn_mask.clicked.connect(lambda: self._load_reference_preview(force=True))
         lay_mask.addWidget(btn_mask)
         row_brush = QHBoxLayout()
-        row_brush.addWidget(QLabel("Pinceau"))
+        row_brush.addWidget(QLabel(t("Pinceau")))
         self.slider_brush = QSlider(Qt.Horizontal)
         self.slider_brush.setRange(4, 300)
         self.slider_brush.setValue(40)
@@ -370,16 +370,16 @@ class MainWindow(QMainWindow):
         row_brush.addWidget(self.slider_brush, 1)
         lay_mask.addLayout(row_brush)
         row_tools = QHBoxLayout()
-        self.chk_erase = QCheckBox("Gomme")
+        self.chk_erase = QCheckBox(t("Gomme"))
         self.chk_erase.toggled.connect(self._on_erase_toggled)
         row_tools.addWidget(self.chk_erase)
         row_tools.addStretch(1)
         lay_mask.addLayout(row_tools)
-        btn_inv = QPushButton("Inverser")
+        btn_inv = QPushButton(t("Inverser"))
         btn_inv.setToolTip(t("Inverse le masque : peint ↔ non peint"))
         btn_inv.clicked.connect(lambda: self.mask_editor.invert_mask())
         row_tools.addWidget(btn_inv)
-        btn_clear = QPushButton("Effacer")
+        btn_clear = QPushButton(t("Effacer"))
         btn_clear.setToolTip(t("Efface tout le masque peint (le masque bleu PL n'est pas touché)"))
         btn_clear.clicked.connect(lambda: self.mask_editor.clear_mask())
         row_tools.addWidget(btn_clear)
@@ -390,7 +390,7 @@ class MainWindow(QMainWindow):
         self.chk_top_sky.setChecked(True)
         self.chk_top_sky.setToolTip(t("Masque ML : applique un dégradé vertical à la probabilité « ciel » — le HAUT de l'image est favorisé comme ciel (typique en astrophoto). Décochez pour désactiver."))
         row_sky.addWidget(self.chk_top_sky, 1)
-        row_sky.addWidget(QLabel("Facteur"))
+        row_sky.addWidget(QLabel(t("Facteur")))
         self.spin_top_boost = QDoubleSpinBox()
         self.spin_top_boost.setRange(0.0, 3.0)
         self.spin_top_boost.setSingleStep(0.1)
@@ -429,7 +429,7 @@ class MainWindow(QMainWindow):
         row_lum = QHBoxLayout()  # UNE seule ligne compacte (3 petits spins) pour ne pas faire grossir le panneau
         row_lum.setContentsMargins(0, 0, 0, 0)  # pas de marge -> tient dans 340 px sans barre horizontale
         row_lum.setSpacing(2)
-        row_lum.addWidget(QLabel("Seuil"))
+        row_lum.addWidget(QLabel(t("Seuil")))
         self.spin_lum_thr = QSpinBox()
         self.spin_lum_thr.setRange(0, 255)
         self.spin_lum_thr.setValue(0)
@@ -439,7 +439,7 @@ class MainWindow(QMainWindow):
             "Plus haut = plus de pixels sombres classés avant-plan.")
         )
         row_lum.addWidget(self.spin_lum_thr)
-        row_lum.addWidget(QLabel("Bande"))
+        row_lum.addWidget(QLabel(t("Bande")))
         self.spin_edge_band = QSpinBox()
         self.spin_edge_band.setRange(0, 200)
         self.spin_edge_band.setValue(40)
@@ -501,7 +501,7 @@ class MainWindow(QMainWindow):
         self.combo_mode = QComboBox()
         self.combo_mode.setMinimumWidth(0)
         self.combo_mode.addItems([t("Sigma clipping"), t("Moyenne simple")])
-        form.addRow("Empilement", self.combo_mode)
+        form.addRow(t("Empilement"), self.combo_mode)
         self.spin_kappa = QDoubleSpinBox()
         self.spin_kappa.setRange(1.0, 10.0)
         self.spin_kappa.setValue(2.5)
@@ -541,7 +541,7 @@ class MainWindow(QMainWindow):
                                "Le ciel est détecté par le masque automatique (ONNX) ; l'avant-plan n'est jamais modifié."))
         lay_lp.addWidget(self.chk_lp)
         row_lp2 = QHBoxLayout()
-        row_lp2.addWidget(QLabel("Force"))
+        row_lp2.addWidget(QLabel(t("Force")))
         self.spin_lp = QSlider(Qt.Horizontal)   # curseur (0–100 %, 100 % = maximum)
         self.spin_lp.setRange(0, 100)
         self.spin_lp.setValue(100)
@@ -554,7 +554,7 @@ class MainWindow(QMainWindow):
         row_lp2.addStretch(1)
         lay_lp.addLayout(row_lp2)
         row_lp3 = QHBoxLayout()
-        row_lp3.addWidget(QLabel("Fondu"))
+        row_lp3.addWidget(QLabel(t("Fondu")))
         self.spin_lp_feather = QDoubleSpinBox()
         self.spin_lp_feather.setRange(-1.0, 200.0)
         self.spin_lp_feather.setSingleStep(2.0)
@@ -591,7 +591,7 @@ class MainWindow(QMainWindow):
         lay_lp.addLayout(row_fit)
         row_lp4 = QHBoxLayout()
         row_lp4.setContentsMargins(0, 0, 0, 0)
-        row_lp4.addWidget(QLabel("Cible"))
+        row_lp4.addWidget(QLabel(t("Cible")))
         self.combo_lp_target = QComboBox()
         self.combo_lp_target.addItems([t("Médiane (défaut)"), t("Ciel sombre")])
         self.combo_lp_target.setToolTip(
@@ -703,7 +703,7 @@ class MainWindow(QMainWindow):
         zoom_bar.addStretch(1)
         btn_zm = QPushButton("−")
         btn_zp = QPushButton("+")
-        btn_zfit = QPushButton("Ajuster")
+        btn_zfit = QPushButton(t("Ajuster"))
         btn_z100 = QPushButton("100 %")
         for b in (btn_zm, btn_zp):
             b.setFixedWidth(34)
@@ -789,8 +789,8 @@ class MainWindow(QMainWindow):
             "Ctrl+M": (t("Générer le masque automatique (ONNX)"), self._ml_mask),
             "Ctrl+Return": (t("Lancer l'empilement"), self._run),
             "Escape": (t("Arrêter l'empilement"), self._on_stop),
-            "X": (t("Gomme (on/off)"), lambda: self.chk_erase.setChecked(not self.chk_erase.isChecked())),
-            "I": (t("Inverser le masque"), lambda: self.mask_editor.invert_mask()),
+            t("X"): (t("Gomme (on/off)"), lambda: self.chk_erase.setChecked(not self.chk_erase.isChecked())),
+            t("I"): (t("Inverser le masque"), lambda: self.mask_editor.invert_mask()),
             "+": (t("Pinceau plus gros"), lambda: self._bump_brush(+10)),
             "=": (t("Pinceau plus gros (clavier US)"), lambda: self._bump_brush(+10)),
             "-": (t("Pinceau plus petit"), lambda: self._bump_brush(-10)),
@@ -1192,7 +1192,7 @@ class MainWindow(QMainWindow):
 
     def _run(self):
         if not self._lights:
-            QMessageBox.warning(self, "Empilement", t("Ajoutez des lights."))
+            QMessageBox.warning(self, t("Empilement"), t("Ajoutez des lights."))
             return
         if self._worker is not None and self._worker.isRunning():
             return
