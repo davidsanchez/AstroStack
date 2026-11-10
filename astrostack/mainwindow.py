@@ -406,6 +406,7 @@ class MainWindow(QMainWindow):
 
         self._lights: list[str] = []
         self._ref_idx: int | None = None  # None = image du milieu par défaut ; set par clic dans la liste
+        self._ref_cache = None  # v1.2.0 : ((chemin, date), image) — évite de re-décoder la référence RAW
         self._darks: list[str] = []
         self._flats: list[str] = []
         self._biases: list[str] = []
@@ -1022,6 +1023,17 @@ class MainWindow(QMainWindow):
             self._ref_idx = None
             self._set_ref_label(None)
 
+    def _load_ref_linear(self, path: str):
+        """Image de référence décodée, mise en cache tant que le fichier ne change pas."""
+        try:
+            key = (path, os.path.getmtime(path))
+        except OSError:
+            key = (path, None)
+        if self._ref_cache is None or self._ref_cache[0] != key:
+            self._ref_cache = None  # libère l'ancienne image avant de décoder la nouvelle
+            self._ref_cache = (key, load_image_linear(path))
+        return self._ref_cache[1]
+
     def _ref_index(self) -> int:
         if not self._lights:
             return 0
@@ -1076,7 +1088,7 @@ class MainWindow(QMainWindow):
         )
         QApplication.processEvents()
         try:
-            img = load_image_linear(self._lights[idx]).astype("float32")
+            img = self._load_ref_linear(self._lights[idx]).astype("float32")
         except Exception as exc:
             self._log(f"ERREUR lecture référence : {exc}")
             return
@@ -1204,7 +1216,7 @@ class MainWindow(QMainWindow):
         # réduit à la taille de la fenêtre : sur une petite image le modèle répond « 100 % ciel ».
         ref_path = self._lights[self._ref_index()]
         try:
-            img = load_image_linear(ref_path).astype("float32")
+            img = self._load_ref_linear(ref_path).astype("float32")
         except Exception as exc:
             self._log(f"ERREUR lecture de la référence pour le masque ML : {exc}")
             return
@@ -1334,10 +1346,9 @@ class MainWindow(QMainWindow):
         from .lpcorrect import combine_painted_sky
 
         # v1.1.6 : masque PL calculé sur la RÉFÉRENCE (même image que le masque affiché), pas sur le stack
-        from .rawio import load_image_linear
         import cv2 as _cv2
 
-        ref_img = load_image_linear(self._lights[self._ref_index()]).astype("float32")
+        ref_img = self._load_ref_linear(self._lights[self._ref_index()]).astype("float32")
         if ref_img.ndim == 2:
             ref_img = np.stack([ref_img] * 3, axis=-1)
         if ref_img.shape[:2] != img.shape[:2]:

@@ -124,11 +124,6 @@ def run_pipeline(
 
     # --- image de référence (lights[ref_index]) ---
     cb(0, 0, len(lights), f"Chargement de la référence ({os.path.basename(ref_path)})…")
-    try:
-        ref_shape = load_image_linear(ref_path).shape[:2]
-    except Exception as exc:
-        raise RuntimeError(f"Impossible de lire la référence {ref_path} : {exc}") from exc
-
     # --- masters de calibration ---
     # Si la référence et tous les fichiers de calibration sont des RAW :
     # on calibre SUR LE BAYER BRUT (dark/bias/flat avant dématriçage) — plus correct.
@@ -137,6 +132,14 @@ def run_pipeline(
     use_bayer = is_raw(ref_path) and all(is_raw(p) for p in calib_files)
     master_dark = master_bias = master_flat = None
     bayer_dark = bayer_bias = bayer_flat = None
+    ref_pre = None  # v1.2.0 : référence décodée UNE seule fois (calibration post-dématriçage)
+    ref_shape = None
+    if not use_bayer:
+        try:
+            ref_pre = load_image_linear(ref_path)
+        except Exception as exc:
+            raise RuntimeError(f"Impossible de lire la référence {ref_path} : {exc}") from exc
+        ref_shape = ref_pre.shape[:2]
     if use_bayer:
         target = load_bayer(ref_path)[0].shape  # taille du Bayer de la référence
         if darks:
@@ -160,7 +163,11 @@ def run_pipeline(
             # repli : calibration post-dématriçage
         return calibrate(load_image_linear(path), master_dark, master_bias, master_flat)
 
-    ref = load_light(ref_path).astype(np.float32)
+    if ref_pre is not None:
+        ref = calibrate(ref_pre, master_dark, master_bias, master_flat).astype(np.float32)
+        del ref_pre
+    else:
+        ref = load_light(ref_path).astype(np.float32)
     h, w = ref.shape[:2]
     if scale != 1.0:
         nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
