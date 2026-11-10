@@ -6,6 +6,8 @@ en facteur absolu ; « Ajuster » revient à l'ajustement automatique.
 """
 from __future__ import annotations
 
+from .i18n import t
+
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QScrollArea, QWidget
@@ -117,7 +119,7 @@ class ResultCanvas(ZoomMixin, QWidget):
         p.fillRect(self.rect(), QColor(30, 30, 34))
         if self._pix is None:
             p.setPen(QColor(150, 150, 160))
-            p.drawText(self.rect(), Qt.AlignCenter, "Le résultat apparaîtra ici.")
+            p.drawText(self.rect(), Qt.AlignCenter, t("Le résultat apparaîtra ici."))
         else:
             w, h = self.width(), self.height()
             if self._cache is None or self._cache[1].width() != w or self._cache[1].height() != h:
