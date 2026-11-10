@@ -1340,10 +1340,7 @@ class MainWindow(QMainWindow):
         from .pipeline import _save_result
 
         img = self._stack_base
-        from .lpcorrect import auto_sky_weight
-
-        # v1.0.0 : ciel = masque automatique calculé sur le stack (même source que le pipeline)
-        from .lpcorrect import combine_painted_sky
+        from .lpcorrect import pl_sky_mask
 
         # v1.1.6 : masque PL calculé sur la RÉFÉRENCE (même image que le masque affiché), pas sur le stack
         import cv2 as _cv2
@@ -1353,15 +1350,14 @@ class MainWindow(QMainWindow):
             ref_img = np.stack([ref_img] * 3, axis=-1)
         if ref_img.shape[:2] != img.shape[:2]:
             ref_img = _cv2.resize(ref_img, (img.shape[1], img.shape[0]), interpolation=_cv2.INTER_AREA)
-        sky = auto_sky_weight(ref_img, debug_cb=self._log,
-                              top_gradient=self.chk_top_sky.isChecked(), top_boost=self.spin_top_boost.value(),
-                              lum_refine=self.chk_lum_refine.isChecked(),
-                              lum_thr=(self.spin_lum_thr.value() or None),
-                              edge_band=self.spin_edge_band.value())
-        fg_w = self._meta.get("fg_w")
         # le ciel défini par l'utilisateur (avant-plan peint, sans marge) prime sur le modèle
         fg_raw = self._meta.get("fg_raw")
-        sky = combine_painted_sky(sky, fg_raw if fg_raw is not None else None)
+        sky = pl_sky_mask(ref_img, img.shape[:2], fg_raw,
+                          top_gradient=self.chk_top_sky.isChecked(), top_boost=self.spin_top_boost.value(),
+                          lum_refine=self.chk_lum_refine.isChecked(),
+                          lum_thr=(self.spin_lum_thr.value() or None),
+                          edge_band=self.spin_edge_band.value(), debug_cb=self._log)
+        fg_w = self._meta.get("fg_w")
         strength = self.spin_lp.value() / 100.0
         feather_v = self._lp_feather_value()
         out_path = self._unique_out()

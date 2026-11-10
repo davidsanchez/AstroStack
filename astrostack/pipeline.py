@@ -261,19 +261,17 @@ def run_pipeline(
     if lp_correct:
         if should_cancel is not None and should_cancel():
             raise CancelledError("Annulation demandée par l'utilisateur.")
-        from .lpcorrect import auto_sky_weight, correct_light_pollution
+        from .lpcorrect import correct_light_pollution, pl_sky_mask
 
         cb(3, 0, 1, f"Correction de la pollution lumineuse — force {lp_strength:.0%}, ciel détecté par le masque automatique…")
         try:
             # v1.1.3 : le masque PL reprend le réglage « Gradient Ciel favorisé » de l'interface
             # v1.1.6 : le masque PL est calculé sur la RÉFÉRENCE (comme le masque affiché), pas sur le stack :
             # l'affinage luminance (seuil Otsu) donnait sinon des îlots sombres dans le ciel du stack.
-            sky_lp = auto_sky_weight(ref, out_hw=wh, debug_cb=lambda m: cb(3, 0, 1, m),
-                                     top_gradient=lp_top_gradient, top_boost=lp_top_boost,
-                                     lum_refine=lp_lum_refine, lum_thr=lp_lum_thr, edge_band=lp_edge_band)
-            # le ciel défini par l'utilisateur (avant-plan peint) prime sur le modèle
-            from .lpcorrect import combine_painted_sky
-            sky_lp = combine_painted_sky(sky_lp, m_raw_painted if mask is not None else None)
+            sky_lp = pl_sky_mask(ref, wh, m_raw_painted if mask is not None else None,
+                                 top_gradient=lp_top_gradient, top_boost=lp_top_boost,
+                                 lum_refine=lp_lum_refine, lum_thr=lp_lum_thr, edge_band=lp_edge_band,
+                                 debug_cb=lambda m: cb(3, 0, 1, m))
         except ImportError as exc:
             raise RuntimeError("La détection du ciel a besoin de onnxruntime : pip install onnxruntime") from exc
         if meta_out is not None:

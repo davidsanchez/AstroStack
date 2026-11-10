@@ -64,6 +64,15 @@ def exclude_dark_border(sky: np.ndarray, img: np.ndarray, level: float, margin: 
     return (np.asarray(sky, dtype=np.float32) * (1.0 - black.astype(np.float32))).astype(np.float32)
 
 
+def pl_sky_mask(img_linear: np.ndarray, out_hw, painted_fg, *, top_gradient: bool, top_boost: float,
+                lum_refine: bool, lum_thr, edge_band: int, debug_cb=None) -> np.ndarray:
+    """Ciel utilisé par la correction PL : masque automatique (réglages de l'interface),
+    amputé de l'avant-plan peint. Source unique pour le pipeline ET « Réappliquer la PL »."""
+    sky = auto_sky_weight(img_linear, out_hw=out_hw, debug_cb=debug_cb, top_gradient=top_gradient,
+                          top_boost=top_boost, lum_refine=lum_refine, lum_thr=lum_thr, edge_band=edge_band)
+    return combine_painted_sky(sky, painted_fg)
+
+
 def combine_painted_sky(sky: np.ndarray, painted_fg: np.ndarray | None) -> np.ndarray:
     """Ciel final pour la PL : le masque automatique, AMPUTÉ de l'avant-plan peint par l'utilisateur.
 
