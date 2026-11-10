@@ -121,12 +121,20 @@ astrostack/
   stars.py       détection d'étoiles, corrélation de phase, appariement (ratio de Lowe),
                  homographie RANSAC + affinage ECC + warp local TPS (distorsion), remise
                  à pleine résolution
-  stacker.py     empilement : ciel recalé + sigma clipping, avant-plan fixe, raccord fondu
+  stacker.py     empilement par bandes de lignes : ciel recalé + sigma clipping,
+                 avant-plan fixe, raccord fondu
+  lpcorrect.py   correction de la pollution lumineuse (fond polynomial robuste, forme commune)
   pipeline.py    run_pipeline() : orchestration complète, export TIFF 16 bits + aperçus
-  mlmask.py      masque ML ONNX (SegFormer ADE20K, sky=classe 2), téléchargeable, éditable au pinceau
-  maskwidget.py  éditeur de masque au pinceau (Qt)
-  mainwindow.py  fenêtre principale (Qt)
-  cli.py         ligne de commande (--auto-mask heuristic|ml)
+  mlmask.py      masque ML ONNX (SegFormer ADE20K, sky=classe 2), téléchargeable
   imaging.py     tonemapping pour les aperçus
-tests/test_synthetic.py
+  preview.py     conversions d'image pour l'affichage Qt
+  cli.py         ligne de commande (--auto-mask heuristic|ml)
+  mainwindow.py  fenêtre principale (Qt) : panneaux, actions, aperçus
+  maskwidget.py  éditeur de masque au pinceau (Qt)
+  zoomview.py    zoom et centrage des aperçus (Qt)
+  widgets.py     widgets réutilisables (sections repliables)
+  worker.py      thread de calcul (Qt), annulable
+  theme.py       feuille de style sombre (Qt)
+tests/           tests unitaires et synthétiques (python -m pytest tests)
+CHANGELOG.md     historique des versions
 ```
