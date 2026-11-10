@@ -1,0 +1,91 @@
+# Build automatique à chaque tag v* (ex. v1.2.0) : application macOS (.dmg) et Windows (installeur .exe),
+# publiées dans une Release GitHub. Lançable aussi à la main (Actions > Release > Run workflow).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest        # Apple Silicon (arm64)
+            platform: macos-arm64
+          - os: windows-latest
+            platform: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Version du paquet
+        id: version
+        shell: bash
+        run: |
+          # tag v1.2.0 -> 1.2.0 ; autres lancements (branche, à la main) -> dev-<sha court>
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then V="${GITHUB_REF_NAME#v}"; else V="dev-${GITHUB_SHA::7}"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt onnxruntime pyinstaller
+
+      - name: Icônes
+        run: python packaging/make_icons.py
+
+      - name: Compilation PyInstaller
+        run: pyinstaller --noconfirm packaging/astrostack.spec
+
+      - name: Paquet macOS (.dmg)
+        if: runner.os == 'macOS'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p dist/dmg
+          cp -R dist/AstroStack.app dist/dmg/
+          ln -s /Applications dist/dmg/Applications
+          hdiutil create -volname "AstroStack" -srcfolder dist/dmg -ov -format UDZO \
+            "dist/AstroStack-${VERSION}-${{ matrix.platform }}.dmg"
+
+      - name: Installeur Windows (.exe)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" packaging\astrostack.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            dist/*.dmg
+            dist/AstroStack-Setup-*.exe
+          if-no-files-found: error
+
+  release:
+    needs: build
+    # tags de test (contenant « -test ») : artefacts seulement, pas de Release
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-test')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
