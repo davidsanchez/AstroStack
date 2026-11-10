@@ -5,6 +5,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    branches: ["feature/packaging"]   # TEMPORAIRE : test de la branche, à retirer avant fusion
   workflow_dispatch:
 
 permissions:
