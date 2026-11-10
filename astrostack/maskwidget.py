@@ -136,14 +136,17 @@ class MaskEditor(ZoomMixin, QWidget):
             return
         x, y = pos
         target = self._fit if self.paint_fit else self._mask
-        if not self.paint_fit:
-            self._margin_cache = None
         if target is None:
             return
+        # v1.2.0 : seule la boîte autour du pinceau est mise à jour (pas toute l'image)
         r = max(1, self.brush_size // 2)
-        yy, xx = np.ogrid[: target.shape[0], : target.shape[1]]
+        H, W = target.shape
+        y0, y1 = max(0, y - r), min(H, y + r + 1)
+        x0, x1 = max(0, x - r), min(W, x + r + 1)
+        yy, xx = np.ogrid[y0:y1, x0:x1]
         m = (xx - x) ** 2 + (yy - y) ** 2 <= r * r
-        target[m] = 0 if self.erase else 255
+        sub = target[y0:y1, x0:x1]
+        sub[m] = 0 if self.erase else 255
         self.update()
 
     def mousePressEvent(self, ev) -> None:
@@ -160,6 +163,9 @@ class MaskEditor(ZoomMixin, QWidget):
 
     def mouseReleaseEvent(self, ev) -> None:
         self._painting = False
+        # la marge (dilatation) n'est recalculée qu'à la fin du trait, pas à chaque point
+        self._margin_cache = None
+        self.update()
 
     # --- dessin ---
     def _margin(self) -> np.ndarray:
