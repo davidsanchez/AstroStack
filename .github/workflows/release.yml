@@ -68,7 +68,8 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    # tags de test (contenant « -test ») : artefacts seulement, pas de Release
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-test')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
