@@ -273,6 +273,7 @@ from .maskwidget import MaskEditor
 from .pipeline import run_pipeline
 from .preview import u16_to_qimage
 from .rawio import SUPPORTED_EXTS, list_image_files, load_image_linear
+from .zoomview import ZOOM_STEP, ResultCanvas, ZoomScroll
 
 IMG_FILTER = "Images (*" + " *".join(SUPPORTED_EXTS) + ")"
 SETTINGS = QSettings("AstroStack", "AstroStack")
@@ -286,7 +287,14 @@ QGroupBox::indicator:checked { background-color: #4a90d9; border-color: #6db3f2;
 QGroupBox#CollapsibleBox { margin-top: 4px; padding: 2px 6px 6px 6px; background-color: #202027; }
 QCheckBox#cbHeader { font-weight: 600; color: #9ecbff; font-size: 12px; spacing: 4px; }
 QCheckBox#cbHeader::indicator { width: 0px; height: 0px; border: none; background: transparent; }  /* v0.8.8 : indicateur masqué, flèche ▸/▾ dans le titre */
-QListWidget { background-color: #232329; border: 1px solid #3a3a42; border-radius: 4px; color: #e8e8ec; }
+QListWidget { background-color: #232329; border: 1px solid #3a3a42; border-radius: 8px; color: #e8e8ec; }
+QPushButton { background-color: #2a2a33; border: 1px solid #3a3a46; border-radius: 8px; padding: 5px 12px; }
+QPushButton:hover { background-color: #34343f; border-color: #4a90d9; }
+QPushButton:pressed { background-color: #23232b; }
+QPushButton:disabled { color: #6a6a74; background-color: #222229; }
+QSlider::groove:horizontal { height: 6px; background: #34343f; border-radius: 3px; }
+QSlider::sub-page:horizontal { background: #4a90d9; border-radius: 3px; }
+QSlider::handle:horizontal { background: #9ecbff; width: 14px; height: 14px; margin: -4px 0; border-radius: 7px; }
 QListWidget::item { padding: 1px; }
 QPushButton { background-color: #2e2e36; border: 1px solid #45454f; border-radius: 4px; padding: 4px 8px; color: #e8e8ec; }
 QPushButton:hover { background-color: #3a3a44; }
@@ -440,7 +448,7 @@ class MainWindow(QMainWindow):
         lay_out = QHBoxLayout(box_out)
         self.edit_out = QLabel(self._out_dir)
         self.edit_out.setWordWrap(True)
-        btn_browse = QPushButton("Parcourir…")
+        btn_browse = QPushButton("Choisir…")
         btn_browse.clicked.connect(self._browse_out)
         lay_out.addWidget(self.edit_out, 1)
         lay_out.addWidget(btn_browse)
@@ -454,8 +462,8 @@ class MainWindow(QMainWindow):
         self.lbl_ref.setStyleSheet("color: #9ecbff; font-weight: 600;")
         self.lbl_ref.setToolTip("Image de base utilisée pour l'alignement et l'aperçu : c'est l'image du MILIEU de la liste (modifiable en CLI avec --ref-index N).")
         lay_mask.addWidget(self.lbl_ref)
-        btn_mask = QPushButton("Recharger l'aperçu…")
-        btn_mask.setToolTip("Recharge l'aperçu de la référence (image du milieu de la liste des Images)")
+        btn_mask = QPushButton("Recharger")
+        btn_mask.setToolTip("Recharge l'image de référence (celle choisie dans la liste, ou l'image du milieu). Le masque peint est effacé.")
         btn_mask.clicked.connect(lambda: self._load_reference_preview(force=True))
         lay_mask.addWidget(btn_mask)
         row_brush = QHBoxLayout()
@@ -474,15 +482,17 @@ class MainWindow(QMainWindow):
         lay_mask.addLayout(row_tools)
         #row_tools2 = QHBoxLayout()
         btn_inv = QPushButton("Inverser")
+        btn_inv.setToolTip("Inverse le masque : peint ↔ non peint")
         btn_inv.clicked.connect(lambda: self.mask_editor.invert_mask())
         row_tools.addWidget(btn_inv)
         btn_clear = QPushButton("Effacer")
+        btn_clear.setToolTip("Efface tout le masque peint (le masque bleu PL n'est pas touché)")
         btn_clear.clicked.connect(lambda: self.mask_editor.clear_mask())
         row_tools.addWidget(btn_clear)
 
 
         row_sky = QHBoxLayout()
-        self.chk_top_sky = QCheckBox("Gradient Ciel favorisé")
+        self.chk_top_sky = QCheckBox("Dégradé ciel")
         self.chk_top_sky.setChecked(True)
         self.chk_top_sky.setToolTip("Masque ML : applique un dégradé vertical à la probabilité « ciel » — le HAUT de l'image est favorisé comme ciel (typique en astrophoto). Décochez pour désactiver.")
         row_sky.addWidget(self.chk_top_sky, 1)
@@ -558,20 +568,37 @@ class MainWindow(QMainWindow):
             "plus grand = détails plus fins, mais plus lent. 2000 px recommandé (1200 avant)."
         )
         row_lum.addWidget(self.spin_mask_res)
-        self.btn_lum_reset = QPushButton("Reset")   # v0.8.18 : remet les paramètres de luminance par défaut
-        self.btn_lum_reset.setMaximumWidth(52)
+        self.btn_lum_reset = QPushButton("Par défaut")   # v0.8.18 : remet les paramètres de luminance par défaut
         self.btn_lum_reset.setToolTip(
             "v0.8.18 — remet les paramètres de luminance aux valeurs par défaut : "
             "« Affiner la luminance » cochée, Seuil 0 (auto), Bande 40 px, Rés. 2000 px."
         )
         self.btn_lum_reset.clicked.connect(self._reset_lum_params)
-        row_lum.addWidget(self.btn_lum_reset)
         lay_mask.addLayout(row_lum)
-        btn_ml = QPushButton("Masque ML (ONNX)…")
+        # v1.2.0 : « Masque auto » et « Par défaut » sur la même ligne
+        row_auto = QHBoxLayout()
+        row_auto.setContentsMargins(0, 0, 0, 0)
+        row_auto.setSpacing(4)
+        btn_ml = QPushButton("Masque auto (ONNX)")
         btn_ml.setToolTip("Segmente le ciel avec un modèle ONNX (segformer ADE20K), téléchargeable automatiquement. "
                          "Installez onnxruntime : pip install onnxruntime")
         btn_ml.clicked.connect(self._ml_mask)
-        lay_mask.addWidget(btn_ml)
+        row_auto.addWidget(btn_ml, 1)
+        row_auto.addWidget(self.btn_lum_reset)
+        lay_mask.addLayout(row_auto)
+
+        def _layout_widgets(lay):
+            out = []
+            for i in range(lay.count()):
+                it = lay.itemAt(i)
+                if it.widget() is not None:
+                    out.append(it.widget())
+                elif it.layout() is not None:
+                    out += _layout_widgets(it.layout())
+            return out
+        # v1.2.0 : réglages avancés du masque, visibles seulement en mode expert
+        self._expert_mask = ([self.chk_lum_refine, self.btn_lum_reset]
+                             + _layout_widgets(row_grow) + _layout_widgets(row_lum))
         left.addWidget(box_mask)
 
 
@@ -621,13 +648,15 @@ class MainWindow(QMainWindow):
         lay_lp.addWidget(self.chk_lp)
         row_lp2 = QHBoxLayout()
         row_lp2.addWidget(QLabel("Force"))
-        self.spin_lp = QSpinBox()
-        self.spin_lp.setRange(0, 100)   # v0.9.3 : 100 % maximum (la sur-correction creusait des halos sombres)
+        self.spin_lp = QSlider(Qt.Horizontal)   # v1.2.0 : curseur (0–100 %, 100 % = maximum)
+        self.spin_lp.setRange(0, 100)
         self.spin_lp.setValue(100)
-        self.spin_lp.setSuffix(" %")
-        self.spin_lp.setMaximumWidth(80)
         self.spin_lp.setToolTip("Force de la correction PL : 100 % = correction complète (maximum), 0 % = off.")
-        row_lp2.addWidget(self.spin_lp)
+        self.lbl_lp_val = QLabel("100 %")
+        self.lbl_lp_val.setMinimumWidth(40)
+        self.spin_lp.valueChanged.connect(lambda v: self.lbl_lp_val.setText(f"{v} %"))
+        row_lp2.addWidget(self.spin_lp, 1)
+        row_lp2.addWidget(self.lbl_lp_val)
         row_lp2.addStretch(1)
         lay_lp.addLayout(row_lp2)
         row_lp3 = QHBoxLayout()
@@ -661,7 +690,7 @@ class MainWindow(QMainWindow):
         self.chk_fit.toggled.connect(lambda v: setattr(self.mask_editor, "paint_fit", bool(v)))
         row_fit.addWidget(self.chk_fit)
         row_fit.addStretch(1)
-        btn_reset_pl = QPushButton("Réinitialiser masque PL")
+        btn_reset_pl = QPushButton("Effacer zone bleue")
         btn_reset_pl.setToolTip("Efface la zone bleue d'exclusion PL. Le masque d'alignement (rouge) n'est pas modifié.")
         btn_reset_pl.clicked.connect(lambda: self.mask_editor.clear_fit_mask())
         row_fit.addWidget(btn_reset_pl)
@@ -685,7 +714,7 @@ class MainWindow(QMainWindow):
             "Évite la dominante bleue sous les nuages chauds. Décochez pour un gradient indépendant par canal."
         )
         lay_lp.addWidget(self.chk_lp_shared)
-        self.btn_lp_redo = QPushButton("Réappliquer la PL sur le dernier stack")
+        self.btn_lp_redo = QPushButton("Réappliquer PL")
         self.btn_lp_redo.setEnabled(False)
         self.btn_lp_redo.setToolTip(
             "v0.8.4 : réapplique la correction de la pollution lumineuse avec les réglages "
@@ -721,7 +750,8 @@ class MainWindow(QMainWindow):
         self.log.setMaximumHeight(80)
         self.log.setLineWrapMode(QPlainTextEdit.WidgetWidth)          # v0.8.16 : le log revient à la ligne -> aucune barre horizontale
         self.log.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)   # v0.8.16 : aucune barre de scroll horizontale en bas du panneau
-        left.addWidget(self.log, 1)
+        left.addWidget(self.log)
+        left.addStretch(1)   # v1.2.0 : l'espace libre va ici, pas aux listes d'images (log masqué en mode simple)
 
         panel = QWidget()
         panel.setLayout(left)
@@ -749,6 +779,8 @@ class MainWindow(QMainWindow):
         for b in (box_img, box_dark, box_flat, box_bias, box_opt, box_lp):
             b.chk.toggled.connect(self._on_box_toggled)
 
+        # v1.2.0 : éléments masqués en mode simple (les valeurs restent celles de l'interface)
+        self._expert_only = [box_flat, box_bias, box_opt, box_lp, self.log]  # barre de progression visible en mode simple
         # ---------- zone droite ----------
         right = QVBoxLayout()
         topbar = QHBoxLayout()
@@ -761,19 +793,61 @@ class MainWindow(QMainWindow):
         topbar.addStretch(1)
         right.addLayout(topbar)
 
+        # barre de zoom : agit sur l'onglet affiché (Référence ou Résultat)
+        zoom_bar = QHBoxLayout()
+        zoom_bar.addStretch(1)
+        btn_zm = QPushButton("−")
+        btn_zp = QPushButton("+")
+        btn_zfit = QPushButton("Ajuster")
+        btn_z100 = QPushButton("100 %")
+        for b in (btn_zm, btn_zp):
+            b.setFixedWidth(34)
+        btn_zm.setToolTip("Dézoomer (Ctrl + molette)")
+        btn_zp.setToolTip("Zoomer (Ctrl + molette)")
+        btn_zfit.setToolTip("Ajuster à la fenêtre et centrer")
+        btn_z100.setToolTip("Taille réelle (100 %)")
+        self.lbl_zoom = QLabel("")
+        self.lbl_zoom.setMinimumWidth(90)
+        self.lbl_zoom.setAlignment(Qt.AlignCenter)
+        btn_zm.clicked.connect(lambda: self._zoom_current(1.0 / ZOOM_STEP))
+        btn_zp.clicked.connect(lambda: self._zoom_current(ZOOM_STEP))
+        btn_zfit.clicked.connect(lambda: (self._zoom_view().zoom_fit(), self._update_zoom_label()))
+        btn_z100.clicked.connect(lambda: (self._zoom_view().zoom_100(), self._update_zoom_label()))
+        for w_ in (btn_zm, self.lbl_zoom, btn_zp, btn_zfit, btn_z100):
+            zoom_bar.addWidget(w_)
+        # v1.2.0 : mode simple / expert (ON = expert : tout est visible)
+        self.btn_expert = QPushButton()
+        self.btn_expert.setCheckable(True)
+        self.btn_expert.setToolTip(
+            "Mode expert ON : toutes les options. OFF (simple) : Images, Darks, dossier de sortie, "
+            "Masque, Lancer / Arrêter.")
+        self.btn_expert.toggled.connect(self._set_expert_mode)
+        zoom_bar.addSpacing(12)
+        zoom_bar.addWidget(self.btn_expert)
+        right.addLayout(zoom_bar)
+        try:
+            expert0 = bool(SETTINGS.value("expert_mode", False, type=bool))
+        except Exception:
+            expert0 = False
+        self.btn_expert.setChecked(expert0)   # déclenche _set_expert_mode
+        self._set_expert_mode(expert0)
+
         self.tabs = QTabWidget()
         self.mask_editor = MaskEditor()
-        self.mask_scroll = QScrollArea()
+        self.mask_scroll = ZoomScroll()
         self.mask_scroll.setWidget(self.mask_editor)
-        self.mask_scroll.setAlignment(Qt.AlignCenter)
-        self.mask_editor.installEventFilter(self)          # molette souris = taille du pinceau
+        self.mask_editor.installEventFilter(self)          # molette = pinceau ; Ctrl+molette = zoom
         self.mask_scroll.viewport().installEventFilter(self)
         self.tabs.addTab(self.mask_scroll, "Référence")
-        self.result_label = QLabel("Le résultat apparaîtra ici.")
-        self.result_scroll = QScrollArea()
-        self.result_scroll.setWidget(self.result_label)
-        self.result_label.setAlignment(Qt.AlignCenter)
+        self.result_canvas = ResultCanvas()
+        self.result_scroll = ZoomScroll()
+        self.result_scroll.setWidget(self.result_canvas)
+        self.result_canvas.installEventFilter(self)
+        self.result_scroll.viewport().installEventFilter(self)
         self.tabs.addTab(self.result_scroll, "Résultat")
+        self.tabs.currentChanged.connect(lambda _i: self._update_zoom_label())
+        self.mask_scroll.resized.connect(self._update_zoom_label)
+        self.result_scroll.resized.connect(self._update_zoom_label)
         right.addWidget(self.tabs, 1)
 
         rightw = QWidget()
@@ -796,7 +870,7 @@ class MainWindow(QMainWindow):
             "Ctrl+Shift+O": ("Ajouter un dossier d'images…", lambda: self._add_dir(self._lights, self.list_lights)),
             "Ctrl+D": ("Ajouter des darks…", lambda: self._add_files(self._darks, self.list_darks)),
             "Ctrl+Shift+D": ("Ajouter un dossier de darks…", lambda: self._add_dir(self._darks, self.list_darks)),
-            "Ctrl+M": ("Masque ML (ONNX)", self._ml_mask),
+            "Ctrl+M": ("Générer le masque automatique (ONNX)", self._ml_mask),
             "Ctrl+Return": ("Lancer l'empilement", self._run),
             "Escape": ("Arrêter l'empilement", self._on_stop),
             "X": ("Gomme (on/off)", lambda: self.chk_erase.setChecked(not self.chk_erase.isChecked())),
@@ -817,11 +891,6 @@ class MainWindow(QMainWindow):
         self._log("Prêt. Ajoutez des lights (RAW CR2/DNG/…) — l'aperçu de la référence (image du milieu) se charge automatiquement.")
 
     # ---------- persistance ----------
-    def resizeEvent(self, ev) -> None:
-        super().resizeEvent(ev)
-        if getattr(self, "result_scroll", None) is not None:
-            self._fit_result()  # l'aperçu du résultat suit la taille de la fenêtre
-
     def closeEvent(self, ev) -> None:
         SETTINGS.setValue("geometry", self.saveGeometry())
         SETTINGS.setValue("panel_visible", self.btn_toggle.isChecked())
@@ -855,11 +924,12 @@ class MainWindow(QMainWindow):
         box.addWidget(lst)
         row = QHBoxLayout()
         btn_files = QPushButton("Ajouter…")   # boîte de dialogue FICHiers (ne se rouvre pas ensuite)
-        btn_dir = QPushButton("Dossier…")     # boîte de dialogue DOSSIER, indépendante
+        btn_clear = QPushButton("Vider la liste")  # v1.2.0 : remplace « Dossier… » (raccourci Ctrl+Maj+O conservé)
+        btn_clear.setToolTip("Retire toutes les images de cette liste")
         btn_files.clicked.connect(lambda: self._add_files(backing, lst))
-        btn_dir.clicked.connect(lambda: self._add_dir(backing, lst))
+        btn_clear.clicked.connect(lambda: self._clear_list(backing, lst))
         row.addWidget(btn_files)
-        row.addWidget(btn_dir)
+        row.addWidget(btn_clear)
         box.addLayout(row)
         return lst
 
@@ -875,8 +945,15 @@ class MainWindow(QMainWindow):
         btn.setCursor(Qt.PointingHandCursor)
         btn.setToolTip("Supprimer cette image de la liste")
         btn.clicked.connect(lambda _checked=False, it=item: self._remove_item(lst, backing, it))
+        # v1.2.0 : pastille verte sur la photo de référence (couleur fixée par _highlight_ref)
+        dot = QLabel("●")
+        dot.setObjectName("refdot")
+        dot.setToolTip("Image de référence")
+        dot.setStyleSheet("color: transparent; font-size: 13px;")
         lab = QLabel(os.path.basename(path))
+        lab.setObjectName("name")
         h.addWidget(btn)
+        h.addWidget(dot)
         h.addWidget(lab, 1)
         item.setSizeHint(w.sizeHint())
         lst.addItem(item)
@@ -908,6 +985,22 @@ class MainWindow(QMainWindow):
         self._log(f"{len(files)} fichier(s) ajouté(s) ({len(backing)} au total).")
         self._on_lists_changed()
 
+    def _set_ref_label(self, name: str | None) -> None:
+        """v1.2.0 : pastille verte quand une référence est active, grise sinon."""
+        import html as _html
+        if name:
+            self.lbl_ref.setTextFormat(Qt.RichText)
+            self.lbl_ref.setText(f"Référence : {_html.escape(name)}")
+        else:
+            self.lbl_ref.setTextFormat(Qt.PlainText)
+            self.lbl_ref.setText("Référence : — (ajoutez des images)")
+
+    def _clear_list(self, backing: list[str], lst: QListWidget) -> None:
+        backing.clear()
+        lst.clear()
+        self._log("Liste vidée.")
+        self._on_lists_changed()
+
     def _add_dir(self, backing: list[str], lst: QListWidget) -> None:
         d = QFileDialog.getExistingDirectory(self, "Choisir un dossier d'images", self._last_dir)
         if not d:
@@ -927,7 +1020,7 @@ class MainWindow(QMainWindow):
             self._load_reference_preview(force=False)
         else:
             self._ref_idx = None
-            self.lbl_ref.setText("Référence : — (ajoutez des images)")
+            self._set_ref_label(None)
 
     def _ref_index(self) -> int:
         if not self._lights:
@@ -942,11 +1035,16 @@ class MainWindow(QMainWindow):
         for r in range(self.list_lights.count()):
             it = self.list_lights.item(r)
             w = self.list_lights.itemWidget(it)
-            lab = w.findChild(QLabel) if w is not None else None
+            if w is None:
+                continue
+            lab = w.findChild(QLabel, "name")
             if lab is not None:
                 f = lab.font()
                 f.setBold(r == idx)
                 lab.setFont(f)
+            dot = w.findChild(QLabel, "refdot")
+            if dot is not None:
+                dot.setStyleSheet("color: #3ddc84; font-size: 13px;" if r == idx else "color: transparent; font-size: 13px;")
 
     def _on_light_clicked(self, item) -> None:
         """Clic sur une image de la liste -> elle devient la RÉFÉRENCE (image de base)."""
@@ -966,7 +1064,7 @@ class MainWindow(QMainWindow):
         if not self._lights:
             return
         idx = self._ref_index()
-        self.lbl_ref.setText(f"Référence : {os.path.basename(self._lights[idx])}")
+        self._set_ref_label(os.path.basename(self._lights[idx]))
         self._highlight_ref()
         if not force and self.mask_editor.has_image():
             m = self.mask_editor.get_mask()
@@ -987,10 +1085,7 @@ class MainWindow(QMainWindow):
         # la zone visible (plafond 1200 px) ; la barre de déroulement intervient si la
         # fenêtre est ensuite plus petite. Le masque peint est re-redimensionné à la
         # pleine résolution par le pipeline, donc peindre sur l'aperçu réduit est sûr.
-        vp = self.mask_scroll.viewport().size()
-        scale = min(1.0, 1200.0 / max(h, w))
-        if vp.width() > 60 and vp.height() > 60:
-            scale = min(scale, (vp.width() - 10) / w, (vp.height() - 10) / h)
+        scale = min(1.0, 2000.0 / max(h, w))   # v1.2.0 : l'aperçu s'ajuste à la fenêtre (zoom ensuite)
         if scale < 1.0:
             import cv2
 
@@ -1017,12 +1112,53 @@ class MainWindow(QMainWindow):
 
     def eventFilter(self, obj, ev):
         """Molette de la souris sur l'aperçu de la référence -> pinceau +/- 10 px."""
-        if ev.type() == QEvent.Wheel and obj in (self.mask_editor, self.mask_scroll.viewport()):
+        if ev.type() == QEvent.Wheel and obj in (self.mask_editor, self.mask_scroll.viewport(),
+                                                 self.result_canvas, self.result_scroll.viewport()):
             delta = ev.angleDelta().y()
-            if delta:
+            if delta and (ev.modifiers() & Qt.ControlModifier):
+                # Ctrl + molette : zoom de la vue active
+                view = self.mask_editor if obj in (self.mask_editor, self.mask_scroll.viewport()) else self.result_canvas
+                view.zoom_by(ZOOM_STEP if delta > 0 else 1.0 / ZOOM_STEP)
+                self._update_zoom_label()
+                return True
+            if delta and obj in (self.mask_editor, self.mask_scroll.viewport()):
                 self._bump_brush(+10 if delta > 0 else -10)
                 return True  # événement consommé : la molette ne fait pas défiler la vue
         return super().eventFilter(obj, ev)
+
+    def _set_expert_mode(self, on: bool) -> None:
+        """Mode expert (ON) : toutes les sections. Mode simple (OFF) : les sections de
+        _expert_only sont masquées ; le choix est mémorisé."""
+        on = bool(on)
+        for w_ in self._expert_only + self._expert_mask:
+            w_.setVisible(on)
+        self.btn_expert.blockSignals(True)
+        self.btn_expert.setChecked(on)
+        self.btn_expert.blockSignals(False)
+        self.btn_expert.setText("Mode expert : ON" if on else "Mode expert : OFF")
+        try:
+            SETTINGS.setValue("expert_mode", on)
+        except Exception:
+            pass
+
+    def _zoom_view(self):
+        """Vue dont la barre de zoom règle l'échelle : aperçu de référence ou résultat."""
+        return self.mask_editor if self.tabs.currentIndex() == 0 else self.result_canvas
+
+    def _zoom_current(self, factor: float) -> None:
+        self._zoom_view().zoom_by(factor)
+        self._update_zoom_label()
+
+    def _update_zoom_label(self, *_args) -> None:
+        view = self._zoom_view()
+        if view is self.mask_editor and not self.mask_editor.has_image():
+            self.lbl_zoom.setText("")
+            return
+        if view is self.result_canvas and self.result_canvas._pix is None:
+            self.lbl_zoom.setText("")
+            return
+        pct = round(view.zoom_scale() * 100)
+        self.lbl_zoom.setText(f"{pct} %  (ajusté)" if view.zoom_is_fit() else f"{pct} %")
 
     def _show_shortcuts(self) -> None:
         """F1 : affiche les raccourcis clavier (boîte de dialogue + log)."""
@@ -1246,7 +1382,7 @@ class MainWindow(QMainWindow):
                 self._log("Correction PL désactivée : sauvegarde du stack tel quel.")
             if fg_w is None:
                 fg_w = np.zeros(out.shape[:2], np.float32)
-            paths = _save_result(out_path, out, fg_w)
+            paths = _save_result(out_path, out, fg_w, fg_base=self._meta.get("fg_raw"))
             qimg = u16_to_qimage(out)
             self._result_full = QPixmap.fromImage(qimg)
             self._fit_result()
@@ -1259,17 +1395,9 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
 
     def _fit_result(self):
-        """L'aperçu du résultat tient dans la fenêtre : il est redimensionné à la zone
-        visible (la barre de déroulement intervient si la fenêtre est plus petite)."""
-        pix = self._result_full
-        if pix is None or pix.isNull():
-            return
-        vp = self.result_scroll.viewport().size()
-        if vp.width() < 10 or vp.height() < 10:
-            return
-        scaled = pix.scaled(vp.width() - 4, vp.height() - 4, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.result_label.setPixmap(scaled)
-        self.result_label.resize(scaled.size())
+        """Affiche le résultat dans la vue zoomable (ajusté et centré par défaut)."""
+        self.result_canvas.set_pixmap(self._result_full)
+        self._update_zoom_label()
 
     def _on_failed(self, msg):
         self.btn_run.setEnabled(True)

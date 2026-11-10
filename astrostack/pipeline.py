@@ -24,7 +24,7 @@ from .stacker import feather, stack_frames
 from .stars import estimate_alignment, luminance
 
 
-def _save_result(out_path: str, result_f32: np.ndarray, fg_w: np.ndarray) -> dict:
+def _save_result(out_path: str, result_f32: np.ndarray, fg_w: np.ndarray, fg_base: np.ndarray | None = None) -> dict:
     import imageio.v3 as iio
     import tifffile
 
@@ -34,7 +34,16 @@ def _save_result(out_path: str, result_f32: np.ndarray, fg_w: np.ndarray) -> dic
     preview_path = base + "_preview.png"
     iio.imwrite(preview_path, tonemap_u16(result_f32))
     mask_path = base + "_mask.png"
-    iio.imwrite(mask_path, (fg_w * 255.0).round().astype(np.uint8))
+    if fg_base is not None:
+        # v1.2.0 : base (masque ONNX / peint) en BLANC, extension par dilatation en ORANGE, ciel en noir
+        base_b = np.asarray(fg_base) > 127
+        full_b = np.asarray(fg_w) > 0.5
+        rgb = np.zeros(full_b.shape + (3,), np.uint8)
+        rgb[base_b & full_b] = (255, 255, 255)
+        rgb[full_b & ~base_b] = (255, 140, 0)
+        iio.imwrite(mask_path, rgb)
+    else:
+        iio.imwrite(mask_path, (fg_w * 255.0).round().astype(np.uint8))
     return {"tif": out_path, "preview": preview_path, "mask": mask_path}
 
 
@@ -275,7 +284,7 @@ def run_pipeline(
                 pass
             pre_path = base + "_avant_PL" + (ext or ".tif")  # image AVANT correction (une seule fois)
             if not os.path.exists(pre_path):
-                _save_result(pre_path, result, fg_w)
+                _save_result(pre_path, result, fg_w, fg_base=(m_raw_painted if mask is not None else None))
                 cb(3, 0, 1, f"Image AVANT correction PL écrite : {pre_path}")
             else:
                 cb(3, 0, 1, f"Image AVANT correction PL déjà existante, conservée : {pre_path}")
@@ -288,7 +297,7 @@ def run_pipeline(
         cb(3, 1, 1, "Correction de la pollution lumineuse terminée.")
 
     if out_path:
-        paths = _save_result(out_path, result, fg_w)
+        paths = _save_result(out_path, result, fg_w, fg_base=(m_raw_painted if mask is not None else None))
         cb(4, n, n, f"Écrit : {paths['tif']}")
         if lp_correct and lp_bg is not None:  # v0.9.3 : fond de pollution estimé, étiré pour l'œil
             import imageio.v3 as iio
