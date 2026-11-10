@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .stars import warp_to_ref_valid
+from .stars import warp_to_ref_valid_band
 
 
 def feather(mask_u8: np.ndarray, sigma: float) -> np.ndarray:
@@ -31,49 +31,18 @@ def feather(mask_u8: np.ndarray, sigma: float) -> np.ndarray:
     return cv2.GaussianBlur(m, (k, k), sigma)
 
 
-ROBUST_MAX_BYTES = 1_500_000_000  # buffer des poses warpées (float32) ; au-delà : rejet en streaming
+STACK_BAND_BYTES = 1_500_000_000  # mémoire de travail visée par bande de lignes (v1.2.0)
+_ROW_ARRAYS = 12  # tableaux (bande, w, 3) float32 simultanés en mode sigma
 
 
-def _stack_robust(get_frame, transforms, fg_w, size, kappa, cb):
-    """Empilement ciel par rejet centré sur la MÉDIANE (écart absolu médian robuste, MAD),
-    puis moyenne des valeurs conservées. Même moyenne que l'ancien rejet (bon bruit), sans
-    que les pixels aberrants (parallaxe du sol, arbre) faussent le centre ni l'écart."""
-    h, w = fg_w.shape
-    n = len(transforms)
-    sky2 = (1.0 - fg_w) > 0.5
-    buf = np.empty((n, h, w, 3), np.float32)
-    val = np.zeros((n, h, w), bool)
-    fg_acc = np.zeros((h, w, 3), np.float32)
-    fg_cnt = np.zeros((h, w, 1), np.float32)
-    fg3 = fg_w[..., None]
-    for i in range(n):
-        img = get_frame(i).astype(np.float32)
-        if img.shape[:2] != (h, w):
-            raise ValueError(f"Image {i} : taille {img.shape[:2]} différente de la référence {(h, w)}.")
-        wimg, v = warp_to_ref_valid(img, transforms[i], size)
-        buf[i] = wimg
-        val[i] = (v > 0.5) & sky2
-        fg_acc += img * fg3  # avant-plan : moyenne des poses non warpées (comme avant)
-        fg_cnt += fg3
-        cb(2, i, f"Statistiques ciel {i + 1}/{n}")
-    fg_img = np.where(fg_cnt > 0, fg_acc / np.maximum(fg_cnt, 1e-6), 0.0)
-
-    sky_img = np.zeros((h, w, 3), np.float32)
-    import warnings
-
-    for c in range(3):  # par canal pour limiter la mémoire des tableaux temporaires
-        X = np.where(val, buf[..., c], np.nan)
-        with warnings.catch_warnings():  # pixels sans aucune pose valide : traités plus bas
-            warnings.simplefilter("ignore", RuntimeWarning)
-            med = np.nanmedian(X, axis=0)
-            mad = np.nanmedian(np.abs(X - med), axis=0) * 1.4826 + 1e-3
-        ok = val & (np.abs(buf[..., c] - med) <= kappa * mad)
-        k = ok.sum(0)
-        mean_ok = (buf[..., c] * ok).sum(0) / np.maximum(k, 1)
-        has = np.isfinite(med)
-        sky_img[..., c] = np.where(k > 0, mean_ok, np.where(has, med, buf[0][..., c]))
-        cb(3, c, f"Rejet robuste du ciel — canal {c + 1}/3")
-    return sky_img * (1.0 - fg3) + fg_img * fg3
+def _band_plan(h: int, w: int, n: int, mode: str, budget: int) -> tuple[int, int]:
+    """Hauteur de bande et nombre de bandes pour rester sous `budget` octets."""
+    factor = max(_ROW_ARRAYS, n + 8) if mode == "robust" else _ROW_ARRAYS
+    per_row = max(1, w * 3 * 4 * factor)
+    bh = max(1, min(h, budget // per_row))
+    nb = -(-h // bh)          # plafond
+    bh = -(-h // nb)          # bandes équilibrées
+    return bh, nb
 
 
 def stack_frames(
@@ -83,57 +52,71 @@ def stack_frames(
     mode: str = "sigma",
     kappa: float = 2.5,
     progress_cb=None,
+    band_bytes: int | None = None,
 ) -> np.ndarray:
-    """Empile les images.
+    """Empile les images, par bandes de lignes pour borner la mémoire.
 
     get_frame(i) -> image float32 HxWx3 calibrée (i dans [0, n[).
     transforms[i] -> matrice 2x3/3x3 forward frame->référence, tuple ("remap", mx, my),
                      ou None (référence elle-même).
     fg_w : float32 HxW, 1.0 = avant-plan (fixe), 0.0 = ciel (recalé).
+    band_bytes : budget mémoire par bande (défaut STACK_BAND_BYTES).
     Retourne l'image float32 HxWx3 (0..65535).
     """
     h, w = fg_w.shape
-    size = (w, h)
-    sky3 = (1.0 - fg_w)[..., None]
-    fg3 = fg_w[..., None]
     n = len(transforms)
+    bh, nb = _band_plan(h, w, n, mode, band_bytes or STACK_BAND_BYTES)
+    out = np.empty((h, w, 3), np.float32)
+    for k in range(nb):
+        r0, r1 = k * bh, min(h, (k + 1) * bh)
 
-    def cb(stage, i, msg):
-        if progress_cb:
-            progress_cb(stage, i, n, msg)
+        def cb(stage, i, msg, _k=k):
+            if progress_cb:
+                tag = f" [bande {_k + 1}/{nb}]" if nb > 1 else ""
+                progress_cb(stage, i, n, msg + tag)
 
-    # v0.9.1 (opt-in, mode="robust") : rejet centré sur la médiane (MAD) quand toutes les poses
-    # tiennent en mémoire. Par défaut, "sigma" garde le rejet en flux d'origine.
-    if mode == "robust" and n * h * w * 3 * 4 <= ROBUST_MAX_BYTES:
-        return _stack_robust(get_frame, transforms, fg_w, size, kappa, cb)
+        out[r0:r1] = _stack_rows(get_frame, transforms, fg_w[r0:r1], (w, h), r0, r1, mode, kappa, cb)
+    return out
+
+
+def _stack_rows(get_frame, transforms, fg_b, size, r0, r1, mode, kappa, cb):
+    """Empile les lignes [r0, r1) de la référence."""
+    w, h = size
+    bh = r1 - r0
+    n = len(transforms)
+    sky3 = (1.0 - fg_b)[..., None]
+    fg3 = fg_b[..., None]
+
+    if mode == "robust":
+        return _stack_robust_rows(get_frame, transforms, fg_b, size, r0, r1, kappa, cb)
 
     # --- passe 1 : statistiques dans le ciel (avec poids de validité) + avant-plan ---
-    acc = np.zeros((h, w, 3), np.float32)
-    acc2 = np.zeros((h, w, 3), np.float32)
-    cnt = np.zeros((h, w, 1), np.float32)
-    fg_acc = np.zeros((h, w, 3), np.float32)
-    fg_cnt = np.zeros((h, w, 1), np.float32)
+    acc = np.zeros((bh, w, 3), np.float32)
+    acc2 = np.zeros((bh, w, 3), np.float32)
+    cnt = np.zeros((bh, w, 1), np.float32)
+    fg_acc = np.zeros((bh, w, 3), np.float32)
+    fg_cnt = np.zeros((bh, w, 1), np.float32)
     ref_img = None
 
     for i in range(n):
-        img = get_frame(i).astype(np.float32)
+        img = np.asarray(get_frame(i), dtype=np.float32)  # pas de copie si déjà float32
         if img.shape[:2] != (h, w):
             raise ValueError(
                 f"Image {i} : taille {img.shape[:2]} différente de la référence {(h, w)} "
                 "(le redimensionnement automatique a échoué)."
             )
-        wimg, val = warp_to_ref_valid(img, transforms[i], size)  # val : 1.0 = pixel couvert
+        wimg, val = warp_to_ref_valid_band(img, transforms[i], size, r0, r1)
         v3 = val[..., None]
         if i == 0:
-            ref_img = img  # la référence couvre tout le canevas, jamais warpée
+            ref_img = img[r0:r1].copy()  # la référence couvre tout le canevas, jamais warpée
         acc += wimg * sky3 * v3
         acc2 += (wimg * wimg) * sky3 * v3
         cnt += sky3 * v3
-        fg_acc += img * fg3
+        fg_acc += img[r0:r1] * fg3
         fg_cnt += fg3
         cb(2, i, f"Statistiques ciel {i + 1}/{n}")
 
-    safe = cnt > 0  # (h, w, 1)
+    safe = cnt > 0  # (bh, w, 1)
     cnt_safe = np.maximum(cnt, 1e-6)
     mean = np.where(safe, acc / cnt_safe, 0.0).astype(np.float32)
     var = np.where(safe, np.maximum(acc2 / cnt_safe - mean ** 2, 0.0), 0.0).astype(np.float32)
@@ -143,12 +126,12 @@ def stack_frames(
     # --- passe 2 : sigma clipping dans le ciel ---
     if mode == "sigma":
         acc3 = np.zeros_like(acc)
-        cnt3 = np.zeros((h, w, 1), np.float32)
+        cnt3 = np.zeros((bh, w, 1), np.float32)
         for i in range(n):
-            img = get_frame(i).astype(np.float32)
+            img = np.asarray(get_frame(i), dtype=np.float32)
             if img.shape[:2] != (h, w):
                 raise ValueError(f"Image {i} : taille {img.shape[:2]} != référence {(h, w)}")
-            wimg, val = warp_to_ref_valid(img, transforms[i], size)
+            wimg, val = warp_to_ref_valid_band(img, transforms[i], size, r0, r1)
             valid = (np.abs(wimg - mean) <= kappa * std).all(axis=2, keepdims=True) & safe & (val[..., None] > 0.5)
             acc3 += wimg * valid * sky3
             cnt3 += valid * sky3
@@ -164,3 +147,46 @@ def stack_frames(
 
     # --- composition finale : ciel recalé + avant-plan fixe, raccord fondu ---
     return sky_img * sky3 + fg_img * fg3
+
+
+def _stack_robust_rows(get_frame, transforms, fg_b, size, r0, r1, kappa, cb):
+    """Rejet centré sur la MÉDIANE (écart absolu médian robuste, MAD) pour les lignes
+    [r0, r1), puis moyenne des valeurs conservées. Les pixels aberrants (parallaxe du sol,
+    arbre) ne faussent ni le centre ni l'écart."""
+    w, h = size
+    bh = r1 - r0
+    n = len(transforms)
+    sky2 = (1.0 - fg_b) > 0.5
+    buf = np.empty((n, bh, w, 3), np.float32)
+    val = np.zeros((n, bh, w), bool)
+    fg_acc = np.zeros((bh, w, 3), np.float32)
+    fg_cnt = np.zeros((bh, w, 1), np.float32)
+    fg3 = fg_b[..., None]
+    for i in range(n):
+        img = np.asarray(get_frame(i), dtype=np.float32)
+        if img.shape[:2] != (h, w):
+            raise ValueError(f"Image {i} : taille {img.shape[:2]} différente de la référence {(h, w)}.")
+        wimg, v = warp_to_ref_valid_band(img, transforms[i], size, r0, r1)
+        buf[i] = wimg
+        val[i] = (v > 0.5) & sky2
+        fg_acc += img[r0:r1] * fg3  # avant-plan : moyenne des poses non warpées
+        fg_cnt += fg3
+        cb(2, i, f"Statistiques ciel {i + 1}/{n}")
+    fg_img = np.where(fg_cnt > 0, fg_acc / np.maximum(fg_cnt, 1e-6), 0.0)
+
+    sky_img = np.zeros((bh, w, 3), np.float32)
+    import warnings
+
+    for c in range(3):  # par canal pour limiter la mémoire des tableaux temporaires
+        X = np.where(val, buf[..., c], np.nan)
+        with warnings.catch_warnings():  # pixels sans aucune pose valide : traités plus bas
+            warnings.simplefilter("ignore", RuntimeWarning)
+            med = np.nanmedian(X, axis=0)
+            mad = np.nanmedian(np.abs(X - med), axis=0) * 1.4826 + 1e-3
+        ok = val & (np.abs(buf[..., c] - med) <= kappa * mad)
+        k = ok.sum(0)
+        mean_ok = (buf[..., c] * ok).sum(0) / np.maximum(k, 1)
+        has = np.isfinite(med)
+        sky_img[..., c] = np.where(k > 0, mean_ok, np.where(has, med, buf[0][..., c]))
+        cb(3, c, f"Rejet robuste du ciel — canal {c + 1}/3")
+    return sky_img * (1.0 - fg3) + fg_img * fg3

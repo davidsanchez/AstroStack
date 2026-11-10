@@ -383,6 +383,47 @@ def warp_to_ref(img: np.ndarray, M, size: tuple[int, int]) -> np.ndarray:
     return warp_to_ref_valid(img, M, size)[0]
 
 
+def warp_to_ref_valid_band(img: np.ndarray, M, size: tuple[int, int], r0: int, r1: int):
+    """Comme warp_to_ref_valid, mais ne calcule que les lignes [r0, r1) de la référence.
+
+    Retourne (warp (r1-r0, w, C), validité (r1-r0, w)). Sert à l'empilement par bandes :
+    la mémoire de travail reste bornée quelle que soit la taille de l'image.
+    """
+    w, h = size[0], size[1]
+    bh = r1 - r0
+    if M is None:
+        return img[r0:r1], np.ones((bh, w), np.float32)
+    if isinstance(M, tuple) and len(M) == 3 and M[0] == "remap":
+        mx, my = np.asarray(M[1], dtype=np.float32), np.asarray(M[2], dtype=np.float32)
+        if mx.shape != (h, w):
+            mx = cv2.resize(mx, (w, h), interpolation=cv2.INTER_LINEAR)
+            my = cv2.resize(my, (w, h), interpolation=cv2.INTER_LINEAR)
+        mx, my = np.ascontiguousarray(mx[r0:r1]), np.ascontiguousarray(my[r0:r1])
+        warped = cv2.remap(img, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        # la source est l'image ENTIÈRE (les coordonnées de source décident de la validité)
+        valid = cv2.remap(
+            np.ones((h, w), np.float32), mx, my, cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=0,
+        )
+        return warped, (valid > 0.5).astype(np.float32)
+    ones = np.ones((h, w), np.float32)
+    Mf = np.asarray(M, dtype=np.float64)
+    if Mf.shape == (3, 3):
+        # décalage de la sortie : la bande [r0, r1) devient les lignes 0..bh-1
+        T = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, -float(r0)], [0.0, 0.0, 1.0]])
+        M2 = T @ Mf
+        warp = lambda src: cv2.warpPerspective(
+            src, M2, (w, bh), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0
+        )
+    else:
+        M2 = Mf.copy()
+        M2[1, 2] -= r0
+        warp = lambda src: cv2.warpAffine(
+            src, M2, (w, bh), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0
+        )
+    return warp(img), (warp(ones) > 0.5).astype(np.float32)
+
+
 def warp_to_ref_valid(img: np.ndarray, M, size: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
     """Comme warp_to_ref, mais retourne aussi le masque de validité (float32 HxW,
     1.0 = le pixel recalé tombe DANS l'image source, 0.0 = zone de bord remplie à 0).
