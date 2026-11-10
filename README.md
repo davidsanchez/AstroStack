@@ -93,12 +93,36 @@ Génère une scène synthétique (ciel étoilé + sol), 6 poses bruitées/décal
 l'alignement, le repli par corrélation de phase, la soustraction du dark, la réduction du bruit et la
 fixité de l'avant-plan.
 
-## Packaging en application (Mac / Windows)
+## Télécharger l'application (sans Python)
+
+Les versions prêtes à installer sont publiées dans la page **Releases** du dépôt :
+
+- **macOS (Apple Silicon)** : `AstroStack-<version>-macos-arm64.dmg` → ouvrir, glisser `AstroStack` dans `Applications`.
+  L'application n'est pas encore signée par Apple : au premier lancement, faire un clic droit sur l'app → **Ouvrir**
+  (ou : `xattr -dr com.apple.quarantine /Applications/AstroStack.app`).
+- **Windows (64 bits)** : `AstroStack-Setup-<version>.exe` → lancer l'installeur. SmartScreen peut afficher un
+  avertissement (« éditeur inconnu ») : **Informations complémentaires → Exécuter quand même**.
+
+Le masque ML (ONNX) est inclus ; son modèle (~14 Mo) est téléchargé au premier usage.
+
+## Publier une nouvelle version (build automatique)
+
+1. Mettre à jour la version dans `astrostack/__init__.py` (`__version__`) et `pyproject.toml`.
+2. Créer et pousser un tag : `git tag v1.2.0 && git push origin v1.2.0`.
+3. GitHub Actions (`.github/workflows/release.yml`) compile l'application sur macOS et Windows, puis crée la
+   Release avec le `.dmg` et l'installeur `.exe`. Le même workflow peut être lancé à la main depuis
+   l'onglet **Actions** (sans créer de Release, les fichiers sont dans les artefacts du run).
+
+L'icône est générée par `packaging/make_icons.py` (source : `packaging/icon.png`, redessinable avec `--draw`).
+
+### Compiler localement
 
 ```bash
-pip install pyinstaller
-pyinstaller --windowed --name AstroStack run.py
+pip install -r requirements.txt onnxruntime pyinstaller
+python packaging/make_icons.py
+pyinstaller --noconfirm packaging/astrostack.spec
 # macOS : dist/AstroStack.app   Windows : dist/AstroStack/AstroStack.exe
+# (installeur Windows : ISCC /DAppVersion=1.2.0 packaging\astrostack.iss)
 ```
 
 ## Historique
