@@ -6,6 +6,7 @@ Fonction unique `run_pipeline`, utilisée par l'interface graphique (Qt) et par 
 from __future__ import annotations
 
 import os
+import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -286,7 +287,7 @@ def run_pipeline(
         nonlocal cache_bytes
         if i in cache:
             return cache[i]
-        cb(1, i, n, f"Calibration {os.path.basename(lights[i])}")
+        cb(1, i, n, f"Décodage {os.path.basename(lights[i])}…")
         fut = pending.pop(i, None)
         img = fut.result() if fut is not None else _load_work(i)
         if cache_bytes < CACHE_MAX_BYTES:
@@ -307,10 +308,15 @@ def run_pipeline(
             continue
         if should_cancel is not None and should_cancel():
             raise CancelledError("Annulation demandée par l'utilisateur.")
+        t_get = time.perf_counter()
         img = get_frame(i)
+        t_dec = time.perf_counter() - t_get
         g = luminance(img)
+        cb(1, i, n, f"Alignement {i + 1}/{n} : {os.path.basename(lights[i])} en cours…")
+        t_al = time.perf_counter()
         M, info = estimate_alignment(ref_gray, g, sky, refine_ecc=refine_ecc, refine_local=refine_local,
                                      chrono=align_chrono)
+        t_al = time.perf_counter() - t_al
         transforms[i] = M
         rms = f"{info['rms']:.2f} px" if info["inliers"] else "n/a"
         cc = f", cc ECC {info['ecc_cc']:.3f}" if info.get("ecc_cc") == info.get("ecc_cc") else ""
@@ -320,6 +326,7 @@ def run_pipeline(
             i,
             n,
             f"Alignement {i + 1}/{n} : {os.path.basename(lights[i])} — "
+            f"décodage {t_dec:.1f} s, alignement {t_al:.1f} s — "
             f"méthode {info['method']}, {info['inliers']} inliers, rms {rms}{cc}{loc}, "
             f"{info['n_ref_stars']} étoiles détectées",
         )
