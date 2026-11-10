@@ -24,10 +24,10 @@ class MaskEditor(ZoomMixin, QWidget):
         self.setMouseTracking(True)
         self._qimg: QImage | None = None
         self._mask: np.ndarray | None = None  # uint8 HxW, 255 = avant-plan peint
-        self._margin_cache: np.ndarray | None = None  # v1.2.0 : extension (dilatation) affichée en orange
-        # v1.2.0 : calques RGBA pré-calculés (rouge, bleu, orange), mis à jour par zone au pinceau
+        self._margin_cache: np.ndarray | None = None  # extension (dilatation) affichée en orange
+        # calques RGBA pré-calculés (rouge, bleu, orange), mis à jour par zone au pinceau
         self._rgba: dict[str, np.ndarray | None] = {"red": None, "blue": None, "orange": None}
-        self._fit: np.ndarray | None = None   # v1.1.5 : uint8 HxW, 255 = zone exclue du CALCUL PL (nuages)
+        self._fit: np.ndarray | None = None   # uint8 HxW, 255 = zone exclue du CALCUL PL (nuages)
         self.paint_fit = False                # True : le pinceau peint la zone d'exclusion PL
         self.brush_size = 40  # diamètre en pixels de l'aperçu
         self.erase = False
@@ -152,7 +152,7 @@ class MaskEditor(ZoomMixin, QWidget):
         target = self._fit if self.paint_fit else self._mask
         if target is None:
             return
-        # v1.2.0 : seule la boîte autour du pinceau est mise à jour (pas toute l'image)
+        # seule la boîte autour du pinceau est mise à jour (pas toute l'image)
         r = max(1, self.brush_size // 2)
         H, W = target.shape
         y0, y1 = max(0, y - r), min(H, y + r + 1)

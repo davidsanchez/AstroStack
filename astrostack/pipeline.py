@@ -35,7 +35,7 @@ def _save_result(out_path: str, result_f32: np.ndarray, fg_w: np.ndarray, fg_bas
     iio.imwrite(preview_path, tonemap_u16(result_f32))
     mask_path = base + "_mask.png"
     if fg_base is not None:
-        # v1.2.0 : base (masque ONNX / peint) en BLANC, extension par dilatation en ORANGE, ciel en noir
+        # base (masque ONNX / peint) en BLANC, extension par dilatation en ORANGE, ciel en noir
         base_b = np.asarray(fg_base) > 127
         full_b = np.asarray(fg_w) > 0.5
         rgb = np.zeros(full_b.shape + (3,), np.uint8)
@@ -132,7 +132,7 @@ def run_pipeline(
     use_bayer = is_raw(ref_path) and all(is_raw(p) for p in calib_files)
     master_dark = master_bias = master_flat = None
     bayer_dark = bayer_bias = bayer_flat = None
-    ref_pre = None  # v1.2.0 : référence décodée UNE seule fois (calibration post-dématriçage)
+    ref_pre = None  # référence décodée UNE seule fois (calibration post-dématriçage)
     ref_shape = None
     if not use_bayer:
         try:
@@ -180,17 +180,17 @@ def run_pipeline(
         if mask.ndim == 3:  # masque RGB -> on prend un canal
             mask = mask[..., 0]
         m = cv2.resize(mask, (wh[1], wh[0]), interpolation=cv2.INTER_NEAREST)
-        # v1.1.1 : les petits îlots (étoiles détectées comme avant-plan) restent fixes à l'empilement
+        # les petits îlots (étoiles détectées comme avant-plan) restent fixes à l'empilement
         from .mlmask import drop_small_islands
         m = drop_small_islands(m)
-        m_raw_painted = m.copy()  # v1.1.4 : masque peint sans dilatation ni fondu, pour la PL
+        m_raw_painted = m.copy()  # masque peint sans dilatation ni fondu, pour la PL
         # marge de sécurité : on dilate l'avant-plan de ~0,5 % (min 3 px) pour que le bord
         # du masque — et son fondu — tombent DANS LE CIEL, jamais sur l'avant-plan
         # (sinon les pixels d'avant-plan au bord du masque seraient warpés = fantômes)
         k = max(3, int(round(min(wh) * 0.005))) | 1
         m = cv2.dilate(m, np.ones((k, k), np.uint8))
         fg_w = feather(m, sigma=max(2.0, min(wh) * 0.004))
-        # v0.9.2 : marge de stacking (2 px par défaut) — elle ne sert QU'À l'empilement :
+        # marge de stacking (2 px par défaut) — elle ne sert QU'À l'empilement :
         # ni dans le masque affiché/exporté (fg_w), ni dans la correction de pollution lumineuse.
         if stack_grow > 0:
             m_stack = cv2.dilate(m, np.ones((3, 3), np.uint8), iterations=int(stack_grow))
@@ -249,14 +249,14 @@ def run_pipeline(
 
     # --- empilement ---
     result = stack_frames(get_frame, transforms, fg_stack, mode=mode, kappa=kappa, progress_cb=cb)
-    if meta_out is not None:  # v0.8.4 : données pour réappliquer la PL sans re-stacker
+    if meta_out is not None:  # données pour réappliquer la PL sans re-stacker
         meta_out["stack_raw"] = result
         meta_out["sky"] = sky
         meta_out["fg_w"] = fg_w
         meta_out["work_shape"] = wh
 
     # --- correction de la pollution lumineuse (linéaire, post-empilement) ---
-    # v1.0.0 : le ciel vient du MASQUE AUTOMATIQUE calculé sur le stack (géométrie de référence).
+    # le ciel vient du MASQUE AUTOMATIQUE calculé sur le stack (géométrie de référence).
     lp_bg = None
     if lp_correct:
         if should_cancel is not None and should_cancel():
@@ -265,8 +265,8 @@ def run_pipeline(
 
         cb(3, 0, 1, f"Correction de la pollution lumineuse — force {lp_strength:.0%}, ciel détecté par le masque automatique…")
         try:
-            # v1.1.3 : le masque PL reprend le réglage « Gradient Ciel favorisé » de l'interface
-            # v1.1.6 : le masque PL est calculé sur la RÉFÉRENCE (comme le masque affiché), pas sur le stack :
+            # le masque PL reprend le réglage « Gradient Ciel favorisé » de l'interface
+            # le masque PL est calculé sur la RÉFÉRENCE (comme le masque affiché), pas sur le stack :
             # l'affinage luminance (seuil Otsu) donnait sinon des îlots sombres dans le ciel du stack.
             sky_lp = pl_sky_mask(ref, wh, m_raw_painted if mask is not None else None,
                                  top_gradient=lp_top_gradient, top_boost=lp_top_boost,
@@ -277,7 +277,7 @@ def run_pipeline(
         if meta_out is not None:
             meta_out["sky_lp"] = sky_lp
             meta_out["ref_path"] = lights[ref_index]
-            meta_out["fg_raw"] = m_raw_painted if mask is not None else None  # v1.1.4 : pour « Réappliquer la PL »
+            meta_out["fg_raw"] = m_raw_painted if mask is not None else None  # pour « Réappliquer la PL »
         if out_path:
             base, ext = os.path.splitext(out_path)
             try:  # diagnostic : masque ciel utilisé
@@ -304,7 +304,7 @@ def run_pipeline(
     if out_path:
         paths = _save_result(out_path, result, fg_w, fg_base=(m_raw_painted if mask is not None else None))
         cb(4, n, n, f"Écrit : {paths['tif']}")
-        if lp_correct and lp_bg is not None:  # v0.9.3 : fond de pollution estimé, étiré pour l'œil
+        if lp_correct and lp_bg is not None:  # fond de pollution estimé, étiré pour l'œil
             import imageio.v3 as iio
 
             base0, _ = os.path.splitext(out_path)

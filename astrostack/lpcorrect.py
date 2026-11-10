@@ -136,10 +136,10 @@ def estimate_background(img: np.ndarray, sky_w: np.ndarray, deg: int = 3, max_sm
     if small.ndim == 2:
         small = small[..., None]
     sky_small = cv2.resize(sky_w.astype(np.float32), (sw, sh), interpolation=cv2.INTER_AREA) >= 0.99
-    if exclude is not None:  # v1.1.5 : zone exclue du calcul (nuages) : jamais un échantillon du fond
+    if exclude is not None:  # zone exclue du calcul (nuages) : jamais un échantillon du fond
         ex_small = cv2.resize(np.asarray(exclude, dtype=np.float32), (sw, sh), interpolation=cv2.INTER_AREA) >= 0.5
         sky_small = sky_small & ~ex_small
-    # v1.1.4 : enveloppe basse par bloc. Un nuage est plus clair que le ciel voisin : dans chaque
+    # enveloppe basse par bloc. Un nuage est plus clair que le ciel voisin : dans chaque
     # bloc on ne garde que les pixels les plus sombres (30e percentile de luminance). Le gradient de
     # pollution, lent, est conservé ; la lueur des nuages n'attire plus le fond.
     lum_s = small.mean(axis=-1) if small.ndim == 3 else small[..., 0]
@@ -217,9 +217,9 @@ def correct_light_pollution(
     feather: float | None = None,
     deg: int = 3,
     neutral: bool = True,
-    shared_shape: bool = True,  # v1.1.3 : forme commune par défaut (évite la dominante bleue sous les nuages chauds)
-    fit_exclude: np.ndarray | None = None,  # v1.1.5 : zone exclue du calcul du fond (reste corrigée)
-    target: str = "median",  # v1.1.3 : "median" (défaut, niveau médian conservé) ou "dark" (ciel le plus sombre conservé)
+    shared_shape: bool = True,  # forme commune par défaut (évite la dominante bleue sous les nuages chauds)
+    fit_exclude: np.ndarray | None = None,  # zone exclue du calcul du fond (reste corrigée)
+    target: str = "median",  # "median" (défaut, niveau médian conservé) ou "dark" (ciel le plus sombre conservé)
     return_background: bool = False,
     debug_cb=None,
 ):
@@ -251,7 +251,7 @@ def correct_light_pollution(
     med_img = np.array([float(np.median(img[..., c][sky_full])) for c in range(img.shape[2])])
     med_bg = np.array([float(np.median(bg[..., c][sky_full])) for c in range(img.shape[2])])
     if target == "dark":
-        # v1.1.3 : cible = bas de la distribution du fond (2e percentile) : seule la pollution est
+        # cible = bas de la distribution du fond (2e percentile) : seule la pollution est
         # retirée, le ciel le plus sombre reste tel quel. Les zones très éclairées sont plus assombries.
         dark_ref = np.array([float(np.percentile(bg[..., c][sky_full], 2)) for c in range(img.shape[2])])
         targets = np.full_like(dark_ref, dark_ref.mean()) if neutral else dark_ref

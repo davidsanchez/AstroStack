@@ -31,7 +31,7 @@ def feather(mask_u8: np.ndarray, sigma: float) -> np.ndarray:
     return cv2.GaussianBlur(m, (k, k), sigma)
 
 
-STACK_BAND_BYTES = 1_500_000_000  # mémoire de travail visée par bande de lignes (v1.2.0)
+STACK_BAND_BYTES = 1_500_000_000  # mémoire de travail visée par bande de lignes
 _ROW_ARRAYS = 12  # tableaux (bande, w, 3) float32 simultanés en mode sigma
 
 

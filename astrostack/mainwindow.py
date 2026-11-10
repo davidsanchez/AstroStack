@@ -402,11 +402,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("AstroStack — empilement de paysages de nuit")
         self.setMinimumSize(880, 620)
-        self.resize(1120, 860)   # v0.8.2 : panneau gauche plus haut par défaut
+        self.resize(1120, 860)   # panneau gauche plus haut par défaut
 
         self._lights: list[str] = []
         self._ref_idx: int | None = None  # None = image du milieu par défaut ; set par clic dans la liste
-        self._ref_cache = None  # v1.2.0 : ((chemin, date), image) — évite de re-décoder la référence RAW
+        self._ref_cache = None  # ((chemin, date), image) — évite de re-décoder la référence RAW
         self._darks: list[str] = []
         self._flats: list[str] = []
         self._biases: list[str] = []
@@ -414,8 +414,8 @@ class MainWindow(QMainWindow):
         self._last_dir = str(SETTINGS.value("last_dir", "")) or os.path.expanduser("~")
         self._worker: StackWorker | None = None
         self._result_full: QPixmap | None = None  # aperçu résultat, pleine résolution
-        self._stack_base = None   # v0.8.4 : stack linéaire AVANT correction PL (pour réappliquer)
-        self._meta: dict = {}     # v0.8.4 : meta_out rempli par le pipeline (sky, fg_w, stack_raw…)
+        self._stack_base = None   # stack linéaire AVANT correction PL (pour réappliquer)
+        self._meta: dict = {}     # meta_out rempli par le pipeline (sky, fg_w, stack_raw…)
 
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -516,7 +516,7 @@ class MainWindow(QMainWindow):
             "en ciel. Décochez pour garder le masque ONNX seul."
         )
         lay_mask.addWidget(self.chk_lum_refine)
-        # v1.1.2 : marge de recalage autour de l'avant-plan, UNIQUEMENT pour l'empilement
+        # marge de recalage autour de l'avant-plan, UNIQUEMENT pour l'empilement
         # (pas affichée, pas exportée, pas utilisée par la PL). Augmenter pour les fantômes d'arbres.
         row_grow = QHBoxLayout()
         row_grow.setContentsMargins(0, 0, 0, 0)
@@ -533,8 +533,8 @@ class MainWindow(QMainWindow):
         row_grow.addWidget(self.spin_stack_grow)
         row_grow.addStretch(1)
         lay_mask.addLayout(row_grow)
-        row_lum = QHBoxLayout()  # v0.8.14 : UNE seule ligne compacte (3 petits spins) pour ne pas faire grossir le panneau
-        row_lum.setContentsMargins(0, 0, 0, 0)  # v0.8.16 : pas de marge -> tient dans 340 px sans barre horizontale
+        row_lum = QHBoxLayout()  # UNE seule ligne compacte (3 petits spins) pour ne pas faire grossir le panneau
+        row_lum.setContentsMargins(0, 0, 0, 0)  # pas de marge -> tient dans 340 px sans barre horizontale
         row_lum.setSpacing(2)
         row_lum.addWidget(QLabel("Seuil"))
         self.spin_lum_thr = QSpinBox()
@@ -569,14 +569,14 @@ class MainWindow(QMainWindow):
             "plus grand = détails plus fins, mais plus lent. 2000 px recommandé (1200 avant)."
         )
         row_lum.addWidget(self.spin_mask_res)
-        self.btn_lum_reset = QPushButton("Par défaut")   # v0.8.18 : remet les paramètres de luminance par défaut
+        self.btn_lum_reset = QPushButton("Par défaut")   # remet les paramètres de luminance par défaut
         self.btn_lum_reset.setToolTip(
             "v0.8.18 — remet les paramètres de luminance aux valeurs par défaut : "
             "« Affiner la luminance » cochée, Seuil 0 (auto), Bande 40 px, Rés. 2000 px."
         )
         self.btn_lum_reset.clicked.connect(self._reset_lum_params)
         lay_mask.addLayout(row_lum)
-        # v1.2.0 : « Masque auto » et « Par défaut » sur la même ligne
+        # « Masque auto » et « Par défaut » sur la même ligne
         row_auto = QHBoxLayout()
         row_auto.setContentsMargins(0, 0, 0, 0)
         row_auto.setSpacing(4)
@@ -597,7 +597,7 @@ class MainWindow(QMainWindow):
                 elif it.layout() is not None:
                     out += _layout_widgets(it.layout())
             return out
-        # v1.2.0 : réglages avancés du masque, visibles seulement en mode expert
+        # réglages avancés du masque, visibles seulement en mode expert
         self._expert_mask = ([self.chk_lum_refine, self.btn_lum_reset]
                              + _layout_widgets(row_grow) + _layout_widgets(row_lum))
         left.addWidget(box_mask)
@@ -649,7 +649,7 @@ class MainWindow(QMainWindow):
         lay_lp.addWidget(self.chk_lp)
         row_lp2 = QHBoxLayout()
         row_lp2.addWidget(QLabel("Force"))
-        self.spin_lp = QSlider(Qt.Horizontal)   # v1.2.0 : curseur (0–100 %, 100 % = maximum)
+        self.spin_lp = QSlider(Qt.Horizontal)   # curseur (0–100 %, 100 % = maximum)
         self.spin_lp.setRange(0, 100)
         self.spin_lp.setValue(100)
         self.spin_lp.setToolTip("Force de la correction PL : 100 % = correction complète (maximum), 0 % = off.")
@@ -677,8 +677,8 @@ class MainWindow(QMainWindow):
         )
         row_lp3.addWidget(self.spin_lp_feather)
         lay_lp.addLayout(row_lp3)
-        # v1.1.3 : cible du fond et forme commune (défauts : médiane + forme commune)
-        # v1.1.5 : zone à exclure du CALCUL de la PL (nuages), peinte en bleu. Décochée, le pinceau
+        # cible du fond et forme commune (défauts : médiane + forme commune)
+        # zone à exclure du CALCUL de la PL (nuages), peinte en bleu. Décochée, le pinceau
         # revient à l'avant-plan rouge (masque d'alignement). Ce n'est pas de l'avant-plan : la zone
         # reste corrigée, elle ne sert qu'à estimer le fond.
         row_fit = QHBoxLayout()
@@ -747,24 +747,24 @@ class MainWindow(QMainWindow):
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(500)
-        self.log.setMinimumHeight(56)   # v0.8.2 : anti-compression
+        self.log.setMinimumHeight(56)   # anti-compression
         self.log.setMaximumHeight(80)
-        self.log.setLineWrapMode(QPlainTextEdit.WidgetWidth)          # v0.8.16 : le log revient à la ligne -> aucune barre horizontale
-        self.log.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)   # v0.8.16 : aucune barre de scroll horizontale en bas du panneau
+        self.log.setLineWrapMode(QPlainTextEdit.WidgetWidth)          # le log revient à la ligne -> aucune barre horizontale
+        self.log.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)   # aucune barre de scroll horizontale en bas du panneau
         left.addWidget(self.log)
-        left.addStretch(1)   # v1.2.0 : l'espace libre va ici, pas aux listes d'images (log masqué en mode simple)
+        left.addStretch(1)   # l'espace libre va ici, pas aux listes d'images (log masqué en mode simple)
 
         panel = QWidget()
         panel.setLayout(left)
         self.panel_scroll = QScrollArea()
-        self.panel_scroll.setWidgetResizable(True)   # v0.8.2 : le contenu ne se compresse plus (défilement si trop haut)
+        self.panel_scroll.setWidgetResizable(True)   # le contenu ne se compresse plus (défilement si trop haut)
         self.panel_scroll.setFrameShape(QFrame.NoFrame)
         self.panel_scroll.setWidget(panel)
         self.panel_scroll.setMinimumWidth(360)   # panneau étroit (splitter ~256 px), comme avant
         self.panel_scroll.setMaximumWidth(360)
-        self.panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # le contenu tient dans la largeur allouée (v0.8.16 : aucun horizontal bar, même si un widget déborde)
-        self.panel_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)     # v0.8.16 : seule la barre VERTICALE reste possible (défilement haut/bas)
-        # v0.8.17 : AUCUNE barre HORIZONTALE visible dans le panneau gauche, quoi qu'il arrive :
+        self.panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # le contenu tient dans la largeur allouée
+        self.panel_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)     # seule la barre VERTICALE reste possible (défilement haut/bas)
+        # AUCUNE barre HORIZONTALE visible dans le panneau gauche, quoi qu'il arrive :
         # policy off + scrollbar elle-même cachée + QSS hauteur 0 sur toute barre horizontale
         # (y compris celles des widgets internes : log, listes…) — catch-all QAbstractScrollArea
         self.panel_scroll.horizontalScrollBar().setVisible(False)
@@ -776,11 +776,11 @@ class MainWindow(QMainWindow):
             "QScrollArea { border: none; background: transparent; }"
             "QScrollBar:horizontal { height: 0px; }"  # même "shown", une barre horizontale fait 0 px de haut -> invisible
         )
-        # v0.8.2 : déplier/replier une box ajuste la hauteur de la fenêtre (anti-compression)
+        # déplier/replier une box ajuste la hauteur de la fenêtre (anti-compression)
         for b in (box_img, box_dark, box_flat, box_bias, box_opt, box_lp):
             b.chk.toggled.connect(self._on_box_toggled)
 
-        # v1.2.0 : éléments masqués en mode simple (les valeurs restent celles de l'interface)
+        # éléments masqués en mode simple (les valeurs restent celles de l'interface)
         self._expert_only = [box_flat, box_bias, box_opt, box_lp, self.log]  # barre de progression visible en mode simple
         # ---------- zone droite ----------
         right = QVBoxLayout()
@@ -816,7 +816,7 @@ class MainWindow(QMainWindow):
         btn_z100.clicked.connect(lambda: (self._zoom_view().zoom_100(), self._update_zoom_label()))
         for w_ in (btn_zm, self.lbl_zoom, btn_zp, btn_zfit, btn_z100):
             zoom_bar.addWidget(w_)
-        # v1.2.0 : mode simple / expert (ON = expert : tout est visible)
+        # mode simple / expert (ON = expert : tout est visible)
         self.btn_expert = QPushButton()
         self.btn_expert.setCheckable(True)
         self.btn_expert.setToolTip(
@@ -918,14 +918,14 @@ class MainWindow(QMainWindow):
     # ---------- listes de fichiers (✕ par item, ajout fichiers/dossier séparé) ----------
     def _make_list_row(self, box: CollapsibleBox, backing: list[str]) -> QListWidget:
         lst = QListWidget()
-        lst.setMinimumHeight(48)   # v0.8.2 : anti-compression
+        lst.setMinimumHeight(48)   # anti-compression
         lst.setMaximumHeight(60)
-        lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # v0.8.16 : pas de barre horizontale dans le panneau
-        lst.setTextElideMode(Qt.ElideMiddle)                      # v0.8.16 : noms de fichiers longs tronqués avec « … »
+        lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # pas de barre horizontale dans le panneau
+        lst.setTextElideMode(Qt.ElideMiddle)                      # noms de fichiers longs tronqués avec « … »
         box.addWidget(lst)
         row = QHBoxLayout()
         btn_files = QPushButton("Ajouter…")   # boîte de dialogue FICHiers (ne se rouvre pas ensuite)
-        btn_clear = QPushButton("Vider la liste")  # v1.2.0 : remplace « Dossier… » (raccourci Ctrl+Maj+O conservé)
+        btn_clear = QPushButton("Vider la liste")  # remplace « Dossier… » (raccourci Ctrl+Maj+O conservé)
         btn_clear.setToolTip("Retire toutes les images de cette liste")
         btn_files.clicked.connect(lambda: self._add_files(backing, lst))
         btn_clear.clicked.connect(lambda: self._clear_list(backing, lst))
@@ -946,7 +946,7 @@ class MainWindow(QMainWindow):
         btn.setCursor(Qt.PointingHandCursor)
         btn.setToolTip("Supprimer cette image de la liste")
         btn.clicked.connect(lambda _checked=False, it=item: self._remove_item(lst, backing, it))
-        # v1.2.0 : pastille verte sur la photo de référence (couleur fixée par _highlight_ref)
+        # pastille verte sur la photo de référence (couleur fixée par _highlight_ref)
         dot = QLabel("●")
         dot.setObjectName("refdot")
         dot.setToolTip("Image de référence")
@@ -1097,7 +1097,7 @@ class MainWindow(QMainWindow):
         # la zone visible (plafond 1200 px) ; la barre de déroulement intervient si la
         # fenêtre est ensuite plus petite. Le masque peint est re-redimensionné à la
         # pleine résolution par le pipeline, donc peindre sur l'aperçu réduit est sûr.
-        scale = min(1.0, 2000.0 / max(h, w))   # v1.2.0 : l'aperçu s'ajuste à la fenêtre (zoom ensuite)
+        scale = min(1.0, 2000.0 / max(h, w))   # l'aperçu s'ajuste à la fenêtre (zoom ensuite)
         if scale < 1.0:
             import cv2
 
@@ -1223,7 +1223,7 @@ class MainWindow(QMainWindow):
         if img.ndim == 2:
             img = np.stack([img] * 3, axis=-1)
         h, w = img.shape[:2]
-        max_side = self.spin_mask_res.value()  # v0.8.14 : résolution de travail réglable (défaut 2000 px)
+        max_side = self.spin_mask_res.value()  # résolution de travail réglable (défaut 2000 px)
         if max(h, w) > max_side:
             import cv2
 
@@ -1235,11 +1235,11 @@ class MainWindow(QMainWindow):
             debug_cb=self._log,
             top_gradient=self.chk_top_sky.isChecked(),
             top_boost=self.spin_top_boost.value(),
-            grow=0,  # v0.8.12 : plus d'élargissement +2 px du masque ML (il rognait le ciel)
-            lum_refine=self.chk_lum_refine.isChecked(),  # v0.8.11 : affinage luminance ancré (sombre -> avant-plan, lueur -> ciel)
-            lum_thr=(self.spin_lum_thr.value() or None),  # v0.8.14 : seuil manuel 0..255 (0 = Otsu auto)
-            lum_edge=self.spin_edge_band.value() > 0,     # v0.8.14 : bord recalé sur la luminance pleine résolution
-            edge_band=self.spin_edge_band.value(),        # v0.8.14 : largeur de la bande (px)
+            grow=0,  # plus d'élargissement +2 px du masque ML (il rognait le ciel)
+            lum_refine=self.chk_lum_refine.isChecked(),  # affinage luminance ancré (sombre -> avant-plan, lueur -> ciel)
+            lum_thr=(self.spin_lum_thr.value() or None),  # seuil manuel 0..255 (0 = Otsu auto)
+            lum_edge=self.spin_edge_band.value() > 0,     # bord recalé sur la luminance pleine résolution
+            edge_band=self.spin_edge_band.value(),        # largeur de la bande (px)
         )
         self.mask_editor.set_mask(fg)  # set_mask redimensionne le masque à l'aperçu affiché
         self._log("Masque ML appliqué — retouchez au pinceau : rouge = avant-plan (fixe), le reste sera aligné.")
@@ -1280,17 +1280,17 @@ class MainWindow(QMainWindow):
             out_path=out_path,
             lp_correct=self.chk_lp.isChecked(),
             lp_strength=self.spin_lp.value() / 100.0,
-            lp_top_gradient=self.chk_top_sky.isChecked(),  # v1.1.3 : même gradient « haut = ciel » pour la PL
+            lp_top_gradient=self.chk_top_sky.isChecked(),  # même gradient « haut = ciel » pour la PL
             lp_top_boost=self.spin_top_boost.value(),
-            lp_lum_refine=self.chk_lum_refine.isChecked(),  # v1.1.5 : mêmes réglages que le masque affiché
+            lp_lum_refine=self.chk_lum_refine.isChecked(),  # mêmes réglages que le masque affiché
             lp_lum_thr=(self.spin_lum_thr.value() or None),
             lp_edge_band=self.spin_edge_band.value(),
-            lp_fit_exclude=self.mask_editor.get_fit_mask(),  # v1.1.5 : zone exclue du calcul PL (bleu)
-            lp_target="dark" if self.combo_lp_target.currentIndex() == 1 else "median",  # v1.1.3
-            lp_shared_shape=self.chk_lp_shared.isChecked(),  # v1.1.3
-            lp_feather=self._lp_feather_value(),  # v0.8.15 : fondu PL réglable en UI (« auto » par défaut)
-            stack_grow=self.spin_stack_grow.value(),  # v1.1.2 : marge d'empilement (px)
-            meta_out=self._meta,   # v0.8.4 : sky/fg_w/stack_raw pour réappliquer la PL
+            lp_fit_exclude=self.mask_editor.get_fit_mask(),  # zone exclue du calcul PL (bleu)
+            lp_target="dark" if self.combo_lp_target.currentIndex() == 1 else "median",
+            lp_shared_shape=self.chk_lp_shared.isChecked(),
+            lp_feather=self._lp_feather_value(),  # fondu PL réglable en UI (« auto » par défaut)
+            stack_grow=self.spin_stack_grow.value(),  # marge d'empilement (px)
+            meta_out=self._meta,   # sky/fg_w/stack_raw pour réappliquer la PL
         )
         self.btn_run.setEnabled(False)
         self.btn_stop.setEnabled(True)
@@ -1316,7 +1316,7 @@ class MainWindow(QMainWindow):
     def _on_done(self, result):
         self.btn_run.setEnabled(True)
         self.btn_stop.setEnabled(False)
-        raw = self._meta.get("stack_raw")  # v0.8.4 : stack AVANT correction PL
+        raw = self._meta.get("stack_raw")  # stack AVANT correction PL
         self._stack_base = raw if raw is not None else result
         self.btn_lp_redo.setEnabled(self._stack_base is not None)
         self.tabs.setCurrentIndex(1)
@@ -1342,7 +1342,7 @@ class MainWindow(QMainWindow):
         img = self._stack_base
         from .lpcorrect import pl_sky_mask
 
-        # v1.1.6 : masque PL calculé sur la RÉFÉRENCE (même image que le masque affiché), pas sur le stack
+        # masque PL calculé sur la RÉFÉRENCE (même image que le masque affiché), pas sur le stack
         import cv2 as _cv2
 
         ref_img = self._load_ref_linear(self._lights[self._ref_index()]).astype("float32")

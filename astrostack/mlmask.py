@@ -212,7 +212,7 @@ def predict_sky_mask(img_u8_rgb: np.ndarray, path: str | None = None, input_size
     h, w = img_u8_rgb.shape[:2]
     sky = cv2.resize(sky.astype(np.float32), (w, h), interpolation=cv2.INTER_CUBIC)
     sky = np.clip(sky, 0.0, 1.0)
-    if proba_blur > 0:  # v0.8.9 : proba_blur=0 -> AUCUN lissage de la proba (masque ONNX brut pour la PL)
+    if proba_blur > 0:  # proba_blur=0 -> AUCUN lissage de la proba (masque ONNX brut pour la PL)
         sky = cv2.GaussianBlur(sky, (0, 0), sigmaX=proba_blur, sigmaY=proba_blur)  # lissage fin des bords
     if top_gradient:
         # dégradé vertical : le haut de l'image est favorisé comme ciel
@@ -259,7 +259,7 @@ def refine_foreground(fg: np.ndarray, img_u8_rgb: np.ndarray, *, debug_cb=None,
     if lum_refine or lum_edge:
         lum = luma_u8(img_u8_rgb)
         t = (lum_thr / 255.0) if lum_thr else otsu_threshold(lum)
-    if lum_refine:  # v0.8.11/0.8.12 : affinage luminance ANCRÉ sur le masque ONNX de base
+    if lum_refine:  # affinage luminance ANCRÉ sur le masque ONNX de base
         hi = min(1.0, t * lum_add)
         r = max(15, min(h, w) // 40)  # rayon de « lien » ~2,5 % du petit côté
         kl = np.ones((r, r), np.uint8)
@@ -276,12 +276,12 @@ def refine_foreground(fg: np.ndarray, img_u8_rgb: np.ndarray, *, debug_cb=None,
         _dbg(f"ML : affinage luminance ancré sur l'ONNX — seuil {'manuel' if lum_thr else 'Otsu'} = {t:.3f} "
              f"({t * 255:.0f}/255), lien {r} px, zones > {hi:.3f} reliées au ciel -> ciel ; "
              f"ciel après affinage = {float((fg < 0.5).mean()):.0%} de l'image")
-    if lum_edge:  # v0.8.14 : recalage du BORD sur la luminance pleine résolution (bande ±edge_band px)
+    if lum_edge:  # recalage du BORD sur la luminance pleine résolution (bande ±edge_band px)
         fg_bin = (fg > 0.5).astype(np.uint8)
         B = max(1, int(edge_band))
         kB = np.ones((2 * B + 1, 2 * B + 1), np.uint8)
         band = (cv2.dilate(fg_bin, kB) > 0) & (cv2.erode(fg_bin, kB) == 0)  # frontière ±B px
-        if local_thr:  # v0.9.0 : seuil local — scènes sombres, lueur d'horizon
+        if local_thr:  # seuil local — scènes sombres, lueur d'horizon
             # Bruit du capteur : sur un ciel sombre, le bruit par pixel est de l'ordre du contraste ;
             # un léger lissage (σ 1,5 px) de la luminance réduit ces faux avant-plans près de l'horizon.
             lum_s = cv2.GaussianBlur(lum, (0, 0), 1.5)
@@ -298,13 +298,13 @@ def refine_foreground(fg: np.ndarray, img_u8_rgb: np.ndarray, *, debug_cb=None,
             fg = np.where(band, (lum <= thr_map).astype(np.float32), fg)
             _dbg(f"ML : bord recalé sur la luminance dans une bande de ±{B} px "
                  f"(seuil {t:.3f} = {t * 255:.0f}/255) — détails fins au bord, ciel loin du bord intact")
-    if guided:  # v0.9.0 : bord recalé sur les contours réels de la luminance, pleine résolution
+    if guided:  # bord recalé sur les contours réels de la luminance, pleine résolution
         r_ = guide_radius if guide_radius is not None else max(2, int(round(min(h, w) / 700.0)))
         fg = guided_refine(fg, img_u8_rgb, radius=r_, eps=guide_eps)
         _dbg(f"ML : bord affiné par filtre guidé (rayon {r_} px, eps {guide_eps:g}) — détails fins conservés")
 
     b = (fg > 0.5).astype(np.uint8)
-    if drop_small > 0:  # v0.8.12 : supprime les îlots d'avant-plan sans lien (artefacts, bruit)
+    if drop_small > 0:  # supprime les îlots d'avant-plan sans lien (artefacts, bruit)
         n, labels, stats, _ = cv2.connectedComponentsWithStats(b, connectivity=8)
         if n > 1:
             min_area = max(150.0, drop_small * b.size)
@@ -317,7 +317,7 @@ def refine_foreground(fg: np.ndarray, img_u8_rgb: np.ndarray, *, debug_cb=None,
                 _dbg(f"ML : {dropped} îlot(s) d'avant-plan < {min_area:.0f} px supprimés (sans lien avec le gros blob)")
 
     if guided:
-        # Chemin v0.9.0 : on garde la valeur souple du filtre, STRICTEMENT limitée aux pixels
+        # Chemin on garde la valeur souple du filtre, STRICTEMENT limitée aux pixels
         # retenus (b). Une dilatation ici laissait déborder l'avant-plan de 1-2 px dans le ciel.
         if grow > 0:
             b = cv2.dilate(b, np.ones((3, 3), np.uint8), iterations=grow)
@@ -325,13 +325,13 @@ def refine_foreground(fg: np.ndarray, img_u8_rgb: np.ndarray, *, debug_cb=None,
         return (soft * 255.0).round().astype(np.uint8)
 
     # Ancien chemin (guided=False) : nettoyage morphologique et lissage, inchangés.
-    if edge_smooth > 1:  # v0.8.12 : efface les bords en escalier (granularité, upsample 512 px)
+    if edge_smooth > 1:  # efface les bords en escalier (granularité, upsample 512 px)
         b = cv2.medianBlur(b, edge_smooth | 1)
     k = np.ones((3, 3), np.uint8)
-    if morph:  # v0.8.9 : morph=False -> aucun nettoyage morphologique (masque brut)
+    if morph:  # morph=False -> aucun nettoyage morphologique (masque brut)
         b = cv2.morphologyEx(b, cv2.MORPH_OPEN, k)
         b = cv2.morphologyEx(b, cv2.MORPH_CLOSE, k)
-    if grow > 0:  # v0.8.3 : avant-plan agrandi de `grow` px partout
+    if grow > 0:  # avant-plan agrandi de `grow` px partout
         b = cv2.dilate(b, k, iterations=grow)
         _dbg(f"ML : masque avant-plan dilaté de {grow} px")
     if smooth > 1:
