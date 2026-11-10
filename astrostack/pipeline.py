@@ -6,6 +6,7 @@ Fonction unique `run_pipeline`, utilisée par l'interface graphique (Qt) et par 
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -164,10 +165,10 @@ def run_pipeline(
         return calibrate(load_image_linear(path), master_dark, master_bias, master_flat)
 
     if ref_pre is not None:
-        ref = calibrate(ref_pre, master_dark, master_bias, master_flat).astype(np.float32)
+        ref = np.asarray(calibrate(ref_pre, master_dark, master_bias, master_flat), dtype=np.float32)
         del ref_pre
     else:
-        ref = load_light(ref_path).astype(np.float32)
+        ref = np.asarray(load_light(ref_path), dtype=np.float32)
     h, w = ref.shape[:2]
     if scale != 1.0:
         nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
@@ -206,22 +207,42 @@ def run_pipeline(
     cache: dict[int, np.ndarray] = {}
     CACHE_MAX_BYTES = 2_500_000_000  # ~2.5 Go de frames calibrées en RAM
     cache_bytes = 0
+    # v1.2.1 : la référence est déjà calibrée et à la bonne taille : pas de second décodage
+    cache[ref_index] = ref
+    cache_bytes = ref.nbytes
+    # v1.2.1 : lecture de l'image suivante en arrière-plan (lecture disque / décodage RAW)
+    loader = ThreadPoolExecutor(max_workers=2)
+    pending: dict[int, object] = {}
 
-    def get_frame(i: int) -> np.ndarray:
-        nonlocal cache_bytes
-        if i in cache:
-            return cache[i]
-        cb(1, i, n, f"Calibration {os.path.basename(lights[i])}")
+    def _load_work(i: int) -> np.ndarray:
         try:
-            img = load_light(lights[i]).astype(np.float32)
+            img = np.asarray(load_light(lights[i]), dtype=np.float32)
         except Exception as exc:
             raise RuntimeError(f"Impossible de lire {lights[i]} : {exc}") from exc
         if img.shape[:2] != wh:  # tailles différentes (autre appareil, JPEG, etc.) -> on redimensionne
             img = cv2.resize(img, (wh[1], wh[0]), interpolation=cv2.INTER_AREA)
+        return img
+
+    def prefetch(i: int) -> None:
+        if (0 <= i < n and i not in cache and i not in pending and len(pending) < 2
+                and cache_bytes < CACHE_MAX_BYTES):
+            pending[i] = loader.submit(_load_work, i)
+
+    def _get_frame(i: int) -> np.ndarray:
+        nonlocal cache_bytes
+        if i in cache:
+            return cache[i]
+        cb(1, i, n, f"Calibration {os.path.basename(lights[i])}")
+        fut = pending.pop(i, None)
+        img = fut.result() if fut is not None else _load_work(i)
         if cache_bytes < CACHE_MAX_BYTES:
             cache[i] = img
             cache_bytes += img.nbytes
         return img
+
+    def get_frame(i: int) -> np.ndarray:
+        prefetch(i + 1)  # l'image suivante se lit pendant le calcul de celle-ci
+        return _get_frame(i)
 
     # --- alignement de chaque light sur la référence (phase + étoiles + homographie + ECC + TPS) ---
     ref_gray = luminance(ref)
@@ -248,7 +269,10 @@ def run_pipeline(
         )
 
     # --- empilement ---
-    result = stack_frames(get_frame, transforms, fg_stack, mode=mode, kappa=kappa, progress_cb=cb)
+    try:
+        result = stack_frames(get_frame, transforms, fg_stack, mode=mode, kappa=kappa, progress_cb=cb)
+    finally:
+        loader.shutdown(wait=False, cancel_futures=True)
     if meta_out is not None:  # données pour réappliquer la PL sans re-stacker
         meta_out["stack_raw"] = result
         meta_out["sky"] = sky

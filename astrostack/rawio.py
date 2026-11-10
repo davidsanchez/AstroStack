@@ -256,7 +256,7 @@ def calibrate(
     soustraire le dark sur le Bayer brut (raw.raw_image_visible) avant dématriçage.
     Les darks doivent être pris à ISO/exposition/température proches des lights.
     """
-    x = img_u16.astype(np.float32)
+    x = np.asarray(img_u16, dtype=np.float32)  # copie seulement si le type change
     shape = x.shape[:2]
     if master_bias is not None:
         x -= _resize_like(master_bias, shape)
@@ -268,4 +268,5 @@ def calibrate(
         f = _resize_like(master_flat, shape)
         f = f / max(float(f.mean()), 1e-6)
         x /= np.maximum(f, 1e-3)
-    return np.clip(x, 0.0, 65535.0)
+    np.clip(x, 0.0, 65535.0, out=x)  # en place : pas de tableau supplémentaire
+    return x
