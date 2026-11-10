@@ -30,6 +30,14 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - name: Version du paquet
+        id: version
+        shell: bash
+        run: |
+          # tag v1.2.0 -> 1.2.0 ; autres lancements (branche, à la main) -> dev-<sha court>
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then V="${GITHUB_REF_NAME#v}"; else V="dev-${GITHUB_SHA::7}"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
       - name: Dépendances
         run: |
           python -m pip install --upgrade pip
@@ -44,7 +52,7 @@ jobs:
       - name: Paquet macOS (.dmg)
         if: runner.os == 'macOS'
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ steps.version.outputs.version }}"
           mkdir -p dist/dmg
           cp -R dist/AstroStack.app dist/dmg/
           ln -s /Applications dist/dmg/Applications
@@ -55,7 +63,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $version = "$env:GITHUB_REF_NAME".TrimStart('v')
+          $version = "${{ steps.version.outputs.version }}"
           choco install innosetup -y --no-progress
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" packaging\astrostack.iss
 
