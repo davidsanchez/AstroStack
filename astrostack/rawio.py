@@ -9,6 +9,8 @@ import os
 
 import numpy as np
 
+from .timing import Lap, measure
+
 RAW_EXTS = (".cr2", ".cr3", ".dng", ".nef", ".arw", ".orf", ".rw2", ".raf", ".pef", ".srw", ".raw")
 STD_EXTS = (".tif", ".tiff", ".png", ".jpg", ".jpeg")
 SUPPORTED_EXTS = RAW_EXTS + STD_EXTS
@@ -29,7 +31,7 @@ def srgb_to_linear(c: np.ndarray) -> np.ndarray:
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 
-def load_raw_linear(path: str, half: bool = False) -> np.ndarray:
+def load_raw_linear(path: str, half: bool = False, chrono=None) -> np.ndarray:
     """Charge un fichier RAW et le dématricise en RGB linéaire 16 bits (uint16 HxWx3).
 
     gamma=(1,1) + no_auto_bright => pas de courbe de gamma : on reste en linéaire,
@@ -39,7 +41,9 @@ def load_raw_linear(path: str, half: bool = False) -> np.ndarray:
     """
     import rawpy  # import tardif : pas besoin de rawpy pour les tests unitaires
 
+    lap = Lap(chrono)
     with rawpy.imread(path) as raw:
+        lap.mark("ouverture RAW")
         kwargs = dict(
             use_camera_wb=True,
             use_auto_wb=False,
@@ -54,7 +58,10 @@ def load_raw_linear(path: str, half: bool = False) -> np.ndarray:
             rgb = raw.postprocess(dcb_enhance=False, **kwargs)
         except TypeError:  # anciennes versions de rawpy sans dcb_enhance
             rgb = raw.postprocess(**kwargs)
-    return np.ascontiguousarray(rgb, dtype=np.uint16)
+        lap.mark("dématriçage LibRaw")
+    out = np.ascontiguousarray(rgb, dtype=np.uint16)
+    lap.mark("mise en forme RGB")
+    return out
 
 
 def load_std_linear(path: str) -> np.ndarray:
@@ -81,13 +88,14 @@ def load_std_linear(path: str) -> np.ndarray:
     return (lin * 65535.0).astype(np.uint16)
 
 
-def load_image_linear(path: str, half: bool = False) -> np.ndarray:
+def load_image_linear(path: str, half: bool = False, chrono=None) -> np.ndarray:
     """Charge n'importe quelle image supportée en RGB linéaire 16 bits.
     half : demi-taille (RAW seulement ; sans effet sur TIFF/PNG/JPEG)."""
     ext = os.path.splitext(path)[1].lower()
     if ext in RAW_EXTS:
-        return load_raw_linear(path, half=half)
-    return load_std_linear(path)
+        return load_raw_linear(path, half=half, chrono=chrono)
+    with measure(chrono, "lecture TIFF/PNG"):
+        return load_std_linear(path)
 
 
 def is_raw(path: str) -> bool:
@@ -141,7 +149,7 @@ def build_bayer_master(paths: list[str], kind: str, target_shape=None, progress_
     return acc / len(paths), pattern, black
 
 
-def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_flat=None, half=False):
+def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_flat=None, half=False, chrono=None):
     """Charge un RAW, calibre SUR LE BAYER (dark / bias / flat soustraits avant
     dématriçage), puis dématrice -> RGB linéaire 16 bits (uint16 HxWx3).
 
@@ -155,14 +163,16 @@ def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_f
     import rawpy
 
     if master_dark is None and master_bias is None and master_flat is None:
-        return load_raw_linear(path, half=half)
+        return load_raw_linear(path, half=half, chrono=chrono)
 
+    lap = Lap(chrono)
     with rawpy.imread(path) as raw:
-        vis = raw.raw_image_visible
+        vis = raw.raw_image_visible  # la décompression du RAW a lieu ici
         pattern = np.asarray(raw.raw_pattern)
         black = np.asarray(raw.black_level_per_channel, dtype=np.float32)
         h, w = vis.shape
         black_full = _black_full(pattern, black, (h, w))
+        lap.mark("lecture RAW (décompression)")
 
         def _fit(m):
             m = m[0]
@@ -199,6 +209,7 @@ def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_f
             vis[:] = x.astype(vis.dtype)  # écriture in-place dans le buffer LibRaw
         except Exception:
             return None  # vue non modifiable -> fallback post-dématriçage
+        lap.mark("calibration Bayer (dark / bias / flat)")
 
         kwargs = dict(
             use_camera_wb=True,
@@ -214,7 +225,10 @@ def load_raw_calibrated_bayer(path, master_dark=None, master_bias=None, master_f
             rgb = raw.postprocess(dcb_enhance=False, **kwargs)
         except TypeError:
             rgb = raw.postprocess(**kwargs)
-    return np.ascontiguousarray(rgb, dtype=np.uint16)
+        lap.mark("dématriçage LibRaw")
+    out = np.ascontiguousarray(rgb, dtype=np.uint16)
+    lap.mark("mise en forme RGB")
+    return out
 
 
 def _resize_like(img: np.ndarray, ref_shape: tuple[int, int]) -> np.ndarray:

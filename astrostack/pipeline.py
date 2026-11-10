@@ -23,6 +23,7 @@ from .rawio import (
     load_raw_calibrated_bayer,
 )
 from .stacker import feather, stack_frames
+from .timing import Chrono
 from .stars import estimate_alignment, luminance
 
 
@@ -124,6 +125,7 @@ def run_pipeline(
 
     if not lights:
         raise ValueError("Aucune image light fournie.")
+    chrono = Chrono()  # temps de calibration par étape (affiché en fin d'empilement)
     if not (0 <= ref_index < len(lights)):
         ref_index = 0
     ref_path = lights[ref_index]
@@ -145,23 +147,25 @@ def run_pipeline(
     ref_shape = None
     if not use_bayer:
         try:
-            ref_pre = load_image_linear(ref_path, half=half)
+            ref_pre = load_image_linear(ref_path, half=half, chrono=chrono)
         except Exception as exc:
             raise RuntimeError(f"Impossible de lire la référence {ref_path} : {exc}") from exc
         ref_shape = ref_pre.shape[:2]
     if use_bayer:
         target = load_bayer(ref_path)[0].shape  # taille du Bayer de la référence
-        if darks:
-            bayer_dark = build_bayer_master(darks, "dark", target, cb)
-        if biases:
-            bayer_bias = build_bayer_master(biases, "bias", target, cb)
-        if flats:
-            bayer_flat = build_bayer_master(flats, "flat", target, cb)
+        with chrono.measure("masters Bayer (dark / bias / flat)"):
+            if darks:
+                bayer_dark = build_bayer_master(darks, "dark", target, cb)
+            if biases:
+                bayer_bias = build_bayer_master(biases, "bias", target, cb)
+            if flats:
+                bayer_flat = build_bayer_master(flats, "flat", target, cb)
         cb(0, 0, 1, "Calibration sur Bayer brut (dark/bias/flat soustraits avant dématriçage)")
     else:
-        master_dark = build_master(darks or [], "dark", cb, target_shape=ref_shape)
-        master_bias = build_master(biases or [], "bias", cb, target_shape=ref_shape)
-        master_flat = build_master(flats or [], "flat", cb, target_shape=ref_shape)
+        with chrono.measure("masters RGB (dark / bias / flat)"):
+            master_dark = build_master(darks or [], "dark", cb, target_shape=ref_shape)
+            master_bias = build_master(biases or [], "bias", cb, target_shape=ref_shape)
+            master_flat = build_master(flats or [], "flat", cb, target_shape=ref_shape)
 
     # masters post-dématriçage, construits à la demande uniquement si le repli en a besoin
     # (chemin Bayer dont l'écriture in-place a échoué) : sans eux, l'image n'était pas calibrée
@@ -171,23 +175,28 @@ def run_pipeline(
     def _fallback_masters():
         with fallback_lock:
             if not fallback_masters:
-                fallback_masters.append((
-                    build_master(darks or [], "dark"),
-                    build_master(biases or [], "bias"),
-                    build_master(flats or [], "flat"),
-                ))
+                with chrono.measure("masters RGB (repli)"):
+                    fallback_masters.append((
+                        build_master(darks or [], "dark"),
+                        build_master(biases or [], "bias"),
+                        build_master(flats or [], "flat"),
+                    ))
             return fallback_masters[0]
 
     def load_light(path: str) -> np.ndarray:
         """Charge une light calibrée (Bayer si possible, sinon RGB post-dématriçage)."""
         if use_bayer:
-            img = load_raw_calibrated_bayer(path, bayer_dark, bayer_bias, bayer_flat, half=half)
+            img = load_raw_calibrated_bayer(path, bayer_dark, bayer_bias, bayer_flat, half=half, chrono=chrono)
             if img is not None:
                 return img
             # repli : calibration post-dématriçage avec les masters RGB
             md, mb, mf = _fallback_masters()
-            return calibrate(load_image_linear(path, half=half), md, mb, mf)
-        return calibrate(load_image_linear(path, half=half), master_dark, master_bias, master_flat)
+            rgb = load_image_linear(path, half=half, chrono=chrono)
+            with chrono.measure("calibration (repli, après dématriçage)"):
+                return calibrate(rgb, md, mb, mf)
+        rgb = load_image_linear(path, half=half, chrono=chrono)
+        with chrono.measure("calibration (après dématriçage)"):
+            return calibrate(rgb, master_dark, master_bias, master_flat)
 
     if ref_pre is not None:
         ref = np.asarray(calibrate(ref_pre, master_dark, master_bias, master_flat), dtype=np.float32)
@@ -243,7 +252,9 @@ def run_pipeline(
 
     def _load_work(i: int) -> np.ndarray:
         try:
-            img = np.asarray(load_light(lights[i]), dtype=np.float32)
+            img_lin = load_light(lights[i])
+            with chrono.measure("conversion float32"):
+                img = np.asarray(img_lin, dtype=np.float32)
         except Exception as exc:
             raise RuntimeError(f"Impossible de lire {lights[i]} : {exc}") from exc
         if img.shape[:2] != wh:  # tailles différentes (autre appareil, JPEG, etc.) -> on redimensionne
@@ -301,6 +312,7 @@ def run_pipeline(
                               fast=bool(fast))
     finally:
         loader.shutdown(wait=False, cancel_futures=True)
+    cb(4, n, n, f"Temps de calibration (cumulés sur les images) — {chrono.summary()}")
     if meta_out is not None:  # données pour réappliquer la PL sans re-stacker
         meta_out["stack_raw"] = result
         meta_out["sky"] = sky
