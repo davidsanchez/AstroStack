@@ -24,7 +24,7 @@ from .rawio import (
     load_raw_calibrated_bayer,
 )
 from .stacker import feather, stack_frames
-from .timing import Chrono
+from .timing import Chrono, Phases
 from .stars import estimate_alignment, luminance
 
 
@@ -137,6 +137,8 @@ def run_pipeline(
     if not lights:
         raise ValueError("Aucune image light fournie.")
     chrono = Chrono()  # temps de calibration par étape (affiché en fin d'empilement)
+    phases = Phases()  # temps réel par phase du run (affiché à la fin)
+    align_chrono = Chrono()  # sous-étapes de l'alignement (cumulées sur les images)
     if not (0 <= ref_index < len(lights)):
         ref_index = 0
     ref_path = lights[ref_index]
@@ -297,6 +299,7 @@ def run_pipeline(
         return _get_frame(i)
 
     # --- alignement de chaque light sur la référence (phase + étoiles + homographie + ECC + TPS) ---
+    phases.mark("préparation")
     ref_gray = luminance(ref)
     transforms: list = [None] * n  # la référence est déjà dans sa géométrie
     for i in range(n):
@@ -306,7 +309,8 @@ def run_pipeline(
             raise CancelledError("Annulation demandée par l'utilisateur.")
         img = get_frame(i)
         g = luminance(img)
-        M, info = estimate_alignment(ref_gray, g, sky, refine_ecc=refine_ecc, refine_local=refine_local)
+        M, info = estimate_alignment(ref_gray, g, sky, refine_ecc=refine_ecc, refine_local=refine_local,
+                                     chrono=align_chrono)
         transforms[i] = M
         rms = f"{info['rms']:.2f} px" if info["inliers"] else "n/a"
         cc = f", cc ECC {info['ecc_cc']:.3f}" if info.get("ecc_cc") == info.get("ecc_cc") else ""
@@ -320,6 +324,8 @@ def run_pipeline(
             f"{info['n_ref_stars']} étoiles détectées",
         )
 
+    phases.mark("alignement")
+    cb(2, n, n, f"Temps d'alignement (cumulés sur les images) — {align_chrono.summary()}")
     # --- empilement ---
     try:
         result = stack_frames(get_frame, transforms, fg_stack, mode=mode, kappa=kappa, progress_cb=cb,
@@ -327,6 +333,7 @@ def run_pipeline(
     finally:
         loader.shutdown(wait=False, cancel_futures=True)
     cb(4, n, n, f"Temps de calibration (cumulés sur les images) — {chrono.summary()}")
+    phases.mark("empilement")
     if meta_out is not None:  # données pour réappliquer la PL sans re-stacker
         meta_out["stack_raw"] = result
         meta_out["sky"] = sky
@@ -379,6 +386,7 @@ def run_pipeline(
         )
         cb(3, 1, 1, "Correction de la pollution lumineuse terminée.")
 
+    phases.mark("pollution lumineuse")
     if out_path:
         paths = _save_result(out_path, result, fg_w, fg_base=(m_raw_painted if mask is not None else None))
         cb(4, n, n, f"Écrit : {paths['tif']}")
@@ -391,4 +399,6 @@ def run_pipeline(
             disp = np.clip((b - lo) / max(hi - lo, 1e-6), 0, 1)
             iio.imwrite(base0 + "_fondPL.png", (disp * 255).round().astype(np.uint8))
             cb(4, n, n, f"Fond de pollution lumineuse écrit : {base0}_fondPL.png")
+    phases.mark("écriture")
+    cb(4, n, n, f"Temps réel par phase — {phases.summary()}")
     return result

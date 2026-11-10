@@ -37,6 +37,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from .timing import Lap
+
 DET_MAX = 1600   # taille max de l'image de détection/appage (réduit la charge CPU/RAM)
 MIN_LOCAL = 40   # nombre min d'appariements fiables pour activer le warp local TPS
 
@@ -264,6 +266,7 @@ def estimate_alignment(
     refine_ecc: bool = True,
     refine_local: bool = True,
     min_local: int = MIN_LOCAL,
+    chrono=None,
 ):
     """Estime la transformation qui envoie l'image courante sur la référence.
 
@@ -286,6 +289,7 @@ def estimate_alignment(
         sw, sh = w, h
         ref_s, gray_s, mask_s = ref_gray, gray, sky_mask
     size_s = (sw, sh)
+    lap = Lap(chrono)  # chronométrage des sous-étapes (no-op sans chrono)
 
     # 1) translation grossière (gère les grandes dérives) — M_t = forward frame -> référence
     M_t, resp = phase_translation(ref_s, gray_s, mask_s)
@@ -295,6 +299,7 @@ def estimate_alignment(
     ref_pts = detect_stars(ref_s, mask=mask_s, max_stars=max_stars)
     pts = detect_stars(gray_w, mask=mask_s, max_stars=max_stars)
     src, dst = match_points(ref_pts, pts, max_dist=40.0)
+    lap.mark("alignement : translation + étoiles")
 
     info: dict = {
         "method": "phase",
@@ -336,6 +341,7 @@ def estimate_alignment(
             inl = m_in.ravel().astype(bool)
             method = "similitude"
 
+    lap.mark("alignement : RANSAC")
     if inl.any():
         info["inliers"] = int(inl.sum())
         info["rms"] = _rms(H_s, src_frame, dst, inl)
@@ -349,6 +355,7 @@ def estimate_alignment(
             info["ecc_cc"] = cc
             info["method"] = method + "+ecc"
 
+    lap.mark("alignement : ECC")
     # 5) warp local TPS : corrige la distorsion de l'objectif (traînées dans les coins)
     if refine_local and len(src) >= min_local:
         res = np.sqrt(((_apply3(H_s, src_frame) - dst) ** 2).sum(axis=1))
@@ -359,10 +366,12 @@ def estimate_alignment(
                 mx, my = _local_tps_maps((sh, sw), src_frame[keep], dst[keep], s, (w, h))
                 info["method"] += "+tps"
                 info["n_local"] = int(keep.sum())
+                lap.mark("alignement : warp local TPS")
                 return ("remap", mx, my), info
             except np.linalg.LinAlgError:
                 pass  # TPS mal conditionnée -> on garde l'homographie
 
+    lap.mark("alignement : repli")
     # 6) repli : homographie remise à pleine résolution, H_full = S⁻¹ · H_s · S
     S = np.diag([s, s, 1.0])
     H_full = np.linalg.inv(S) @ H_s @ S

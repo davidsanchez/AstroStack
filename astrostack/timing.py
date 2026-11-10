@@ -54,5 +54,23 @@ class Lap:
         self._t = now
 
 
+class Phases:
+    """Temps réel (horloge murale) de phases successives du run, pour le résumé final."""
+
+    def __init__(self) -> None:
+        self._t = time.perf_counter()
+        self._items: list[tuple[str, float]] = []
+
+    def mark(self, name: str) -> None:
+        now = time.perf_counter()
+        self._items.append((name, now - self._t))
+        self._t = now
+
+    def summary(self) -> str:
+        total = sum(d for _, d in self._items)
+        parts = [f"{n} {d:.1f} s" for n, d in self._items if d >= 0.05]
+        return " ; ".join(parts) + f" ; total {total:.1f} s"
+
+
 def measure(chrono: Chrono | None, name: str):
     return chrono.measure(name) if chrono is not None else nullcontext()
