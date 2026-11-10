@@ -273,7 +273,7 @@ def run_pipeline(
                                  lum_refine=lp_lum_refine, lum_thr=lp_lum_thr, edge_band=lp_edge_band,
                                  debug_cb=lambda m: cb(3, 0, 1, m))
         except ImportError as exc:
-            raise RuntimeError("La détection du ciel a besoin de onnxruntime : pip install onnxruntime") from exc
+            raise RuntimeError(f"Détection du ciel : {exc}") from exc
         if meta_out is not None:
             meta_out["sky_lp"] = sky_lp
             meta_out["ref_path"] = lights[ref_index]

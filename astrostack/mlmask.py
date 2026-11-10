@@ -168,6 +168,18 @@ def local_luma_split(lum: np.ndarray, fg: np.ndarray, t_global: float,
             np.where(fallback, 0.0, contrast), np.where(fallback, t_global, t).astype(np.float32))
 
 
+ONNX_MISSING = "onnxruntime manquant : pip install onnxruntime"
+
+
+def require_onnxruntime():
+    """Importe onnxruntime ou lève ImportError avec la commande d'installation."""
+    try:
+        import onnxruntime as ort
+    except ImportError as exc:
+        raise ImportError(ONNX_MISSING) from exc
+    return ort
+
+
 def predict_sky_mask(img_u8_rgb: np.ndarray, path: str | None = None, input_size: int = 512,
                      sky_cls: int | None = None, top_gradient: bool = False,
                      top_boost: float = 0.5, proba_blur: float = 1.0) -> np.ndarray:
@@ -185,7 +197,7 @@ def predict_sky_mask(img_u8_rgb: np.ndarray, path: str | None = None, input_size
 
     path = ensure_model(path)
     if _session is None or _session_path != path:
-        import onnxruntime as ort  # dépendance optionnelle (pip install onnxruntime)
+        ort = require_onnxruntime()  # dépendance optionnelle
 
         _session = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
         _session_path = path
