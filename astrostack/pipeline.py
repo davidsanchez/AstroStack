@@ -80,6 +80,7 @@ def run_pipeline(
     meta_out: dict | None = None,
     progress_cb=None,
     should_cancel=None,
+    fast: bool = False,
 ) -> np.ndarray:
     """Exécute tout le pipeline. Retourne l'image résultat float32 HxWx3 (0..65535).
 
@@ -109,6 +110,9 @@ def run_pipeline(
                   refaire l'empilement.
     progress_cb : callback(stage:int, i:int, n:int, msg:str).
     should_cancel : callback() -> bool ; si True, lève CancelledError (annulation douce).
+    fast        : mode « Rapide » (False = « Précis », défaut). Peut modifier légèrement le
+                  résultat : RAW décodés à demi-taille si scale <= 50 %, pas de recalcul des
+                  poses en sigma clipping, arithmétique allégée.
     """
 
     def cb(stage, i, n, msg=""):
@@ -133,11 +137,14 @@ def run_pipeline(
     use_bayer = is_raw(ref_path) and all(is_raw(p) for p in calib_files)
     master_dark = master_bias = master_flat = None
     bayer_dark = bayer_bias = bayer_flat = None
+    # mode rapide : RAW à demi-taille quand la résolution de travail est <= 50 %
+    # (seul le décodage RAW sait produire la demi-taille ; TIFF/PNG restent pleine taille)
+    half = bool(fast) and scale <= 0.5 and is_raw(ref_path)
     ref_pre = None  # référence décodée UNE seule fois (calibration post-dématriçage)
     ref_shape = None
     if not use_bayer:
         try:
-            ref_pre = load_image_linear(ref_path)
+            ref_pre = load_image_linear(ref_path, half=half)
         except Exception as exc:
             raise RuntimeError(f"Impossible de lire la référence {ref_path} : {exc}") from exc
         ref_shape = ref_pre.shape[:2]
@@ -158,11 +165,11 @@ def run_pipeline(
     def load_light(path: str) -> np.ndarray:
         """Charge une light calibrée (Bayer si possible, sinon RGB post-dématriçage)."""
         if use_bayer:
-            img = load_raw_calibrated_bayer(path, bayer_dark, bayer_bias, bayer_flat)
+            img = load_raw_calibrated_bayer(path, bayer_dark, bayer_bias, bayer_flat, half=half)
             if img is not None:
                 return img
             # repli : calibration post-dématriçage
-        return calibrate(load_image_linear(path), master_dark, master_bias, master_flat)
+        return calibrate(load_image_linear(path, half=half), master_dark, master_bias, master_flat)
 
     if ref_pre is not None:
         ref = np.asarray(calibrate(ref_pre, master_dark, master_bias, master_flat), dtype=np.float32)
@@ -170,8 +177,10 @@ def run_pipeline(
     else:
         ref = np.asarray(load_light(ref_path), dtype=np.float32)
     h, w = ref.shape[:2]
-    if scale != 1.0:
-        nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+    if half:  # décodé à demi-taille : dimensions pleine résolution = double
+        h, w = 2 * h, 2 * w
+    nh, nw = max(1, int(h * scale)), max(1, int(w * scale))
+    if ref.shape[:2] != (nh, nw):
         ref = cv2.resize(ref, (nw, nh), interpolation=cv2.INTER_AREA)
     wh = ref.shape[:2]
 
@@ -270,7 +279,8 @@ def run_pipeline(
 
     # --- empilement ---
     try:
-        result = stack_frames(get_frame, transforms, fg_stack, mode=mode, kappa=kappa, progress_cb=cb)
+        result = stack_frames(get_frame, transforms, fg_stack, mode=mode, kappa=kappa, progress_cb=cb,
+                              fast=bool(fast))
     finally:
         loader.shutdown(wait=False, cancel_futures=True)
     if meta_out is not None:  # données pour réappliquer la PL sans re-stacker

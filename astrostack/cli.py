@@ -86,6 +86,8 @@ def main(argv=None) -> None:
         "corrige la distorsion de l'objectif et les traînées dans les COINS de l'image",
     )
     p.add_argument("--scale", type=float, default=1.0, help="1.0 = pleine résolution, 0.5 = moitié…")
+    p.add_argument("--fast", action="store_true",
+                   help="mode Rapide (peut légèrement modifier le résultat ; défaut = Précis)")
     p.add_argument(
         "--ref-index",
         type=int,
@@ -200,6 +202,7 @@ def main(argv=None) -> None:
         lp_feather=args.lp_feather,
         stack_grow=args.stack_grow,
         progress_cb=cb,
+        fast=args.fast,
     )
     print("Terminé :", args.out)
 

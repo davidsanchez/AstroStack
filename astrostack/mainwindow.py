@@ -619,6 +619,17 @@ class MainWindow(QMainWindow):
         self.btn_run.setStyleSheet("font-weight: bold; padding: 6px; background-color: #2f5d8a; border-color: #4a90d9;")
         self.btn_run.clicked.connect(self._run)
         row_run.addWidget(self.btn_run, 1)
+        # qualité : Précis (défaut, résultat inchangé) ou Rapide (accélérations, visible en simple et expert)
+        self.btn_speed = QPushButton("Précis")
+        self.btn_speed.setCheckable(True)
+        self.btn_speed.setMinimumWidth(0)
+        self.btn_speed.setToolTip(
+            "Précis : résultat de référence.\n"
+            "Rapide : RAW décodés à demi-taille si résolution ≤ 50 %, poses non recalculées en "
+            "sigma clipping, calcul allégé. Peut légèrement dégrader la qualité."
+        )
+        self.btn_speed.toggled.connect(self._set_speed_mode)
+        row_run.addWidget(self.btn_speed)
         self.btn_stop = QPushButton("⏹ Arrêter")
         self.btn_stop.setEnabled(False)
         self.btn_stop.setToolTip("Annuler l'empilement en cours")
@@ -717,6 +728,12 @@ class MainWindow(QMainWindow):
             expert0 = False
         self.btn_expert.setChecked(expert0)   # déclenche _set_expert_mode
         self._set_expert_mode(expert0)
+        try:
+            fast0 = bool(SETTINGS.value("fast_mode", False, type=bool))
+        except Exception:
+            fast0 = False
+        self.btn_speed.setChecked(fast0)
+        self._set_speed_mode(fast0)
 
         self.tabs = QTabWidget()
         self.mask_editor = MaskEditor()
@@ -1023,6 +1040,15 @@ class MainWindow(QMainWindow):
                 return True  # événement consommé : la molette ne fait pas défiler la vue
         return super().eventFilter(obj, ev)
 
+    def _set_speed_mode(self, fast: bool) -> None:
+        """Précis (OFF, défaut) / Rapide (ON) ; le choix est mémorisé."""
+        fast = bool(fast)
+        self.btn_speed.setText("Rapide" if fast else "Précis")
+        try:
+            SETTINGS.setValue("fast_mode", fast)
+        except Exception:
+            pass
+
     def _set_expert_mode(self, on: bool) -> None:
         """Mode expert (ON) : toutes les sections. Mode simple (OFF) : les sections de
         _expert_only sont masquées ; le choix est mémorisé."""
@@ -1178,6 +1204,7 @@ class MainWindow(QMainWindow):
             lp_feather=self._lp_feather_value(),  # fondu PL réglable en UI (« auto » par défaut)
             stack_grow=self.spin_stack_grow.value(),  # marge d'empilement (px)
             meta_out=self._meta,   # sky/fg_w/stack_raw pour réappliquer la PL
+            fast=self.btn_speed.isChecked(),  # Précis / Rapide
         )
         self.btn_run.setEnabled(False)
         self.btn_stop.setEnabled(True)

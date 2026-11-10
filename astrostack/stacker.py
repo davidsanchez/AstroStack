@@ -35,9 +35,15 @@ STACK_BAND_BYTES = 1_500_000_000  # mémoire de travail visée par bande de lign
 _ROW_ARRAYS = 12  # tableaux (bande, w, 3) float32 simultanés en mode sigma
 
 
-def _band_plan(h: int, w: int, n: int, mode: str, budget: int) -> tuple[int, int]:
-    """Hauteur de bande et nombre de bandes pour rester sous `budget` octets."""
-    factor = max(_ROW_ARRAYS, n + 8) if mode == "robust" else _ROW_ARRAYS
+def _band_plan(h: int, w: int, n: int, mode: str, budget: int, reuse: bool = False) -> tuple[int, int]:
+    """Hauteur de bande et nombre de bandes pour rester sous `budget` octets.
+    reuse : les images recalées de toutes les poses sont gardées en mémoire (sigma rapide)."""
+    if mode == "robust":
+        factor = max(_ROW_ARRAYS, n + 8)
+    elif reuse:
+        factor = max(_ROW_ARRAYS, 2 * n + 8)
+    else:
+        factor = _ROW_ARRAYS
     per_row = max(1, w * 3 * 4 * factor)
     bh = max(1, min(h, budget // per_row))
     nb = -(-h // bh)          # plafond
@@ -53,6 +59,7 @@ def stack_frames(
     kappa: float = 2.5,
     progress_cb=None,
     band_bytes: int | None = None,
+    fast: bool = False,
 ) -> np.ndarray:
     """Empile les images, par bandes de lignes pour borner la mémoire.
 
@@ -61,11 +68,14 @@ def stack_frames(
                      ou None (référence elle-même).
     fg_w : float32 HxW, 1.0 = avant-plan (fixe), 0.0 = ciel (recalé).
     band_bytes : budget mémoire par bande (défaut STACK_BAND_BYTES).
+    fast : mode « Rapide » — sigma : on garde les images recalées de la passe 1 au lieu de
+           les recalculer en passe 2 (même résultat, plus de mémoire) ; arithmétique allégée.
     Retourne l'image float32 HxWx3 (0..65535).
     """
     h, w = fg_w.shape
     n = len(transforms)
-    bh, nb = _band_plan(h, w, n, mode, band_bytes or STACK_BAND_BYTES)
+    reuse = fast and mode == "sigma"
+    bh, nb = _band_plan(h, w, n, mode, band_bytes or STACK_BAND_BYTES, reuse=reuse)
     out = np.empty((h, w, 3), np.float32)
     for k in range(nb):
         r0, r1 = k * bh, min(h, (k + 1) * bh)
@@ -75,17 +85,21 @@ def stack_frames(
                 tag = f" [bande {_k + 1}/{nb}]" if nb > 1 else ""
                 progress_cb(stage, i, n, msg + tag)
 
-        out[r0:r1] = _stack_rows(get_frame, transforms, fg_w[r0:r1], (w, h), r0, r1, mode, kappa, cb)
+        out[r0:r1] = _stack_rows(get_frame, transforms, fg_w[r0:r1], (w, h), r0, r1, mode, kappa, cb, fast)
     return out
 
 
-def _stack_rows(get_frame, transforms, fg_b, size, r0, r1, mode, kappa, cb):
+def _stack_rows(get_frame, transforms, fg_b, size, r0, r1, mode, kappa, cb, fast=False):
     """Empile les lignes [r0, r1) de la référence."""
     w, h = size
     bh = r1 - r0
     n = len(transforms)
     sky3 = (1.0 - fg_b)[..., None]
     fg3 = fg_b[..., None]
+    reuse = fast and mode == "sigma"  # garder les poses recalées pour la passe 2
+    if reuse:
+        wbuf = np.empty((n, bh, w, 3), np.float32)
+        vbuf = np.empty((n, bh, w), np.float32)
 
     if mode == "robust":
         return _stack_robust_rows(get_frame, transforms, fg_b, size, r0, r1, kappa, cb)
@@ -106,12 +120,21 @@ def _stack_rows(get_frame, transforms, fg_b, size, r0, r1, mode, kappa, cb):
                 "(le redimensionnement automatique a échoué)."
             )
         wimg, val = warp_to_ref_valid_band(img, transforms[i], size, r0, r1)
+        if reuse:
+            wbuf[i] = wimg
+            vbuf[i] = val
         v3 = val[..., None]
         if i == 0:
             ref_img = img[r0:r1].copy()  # la référence couvre tout le canevas, jamais warpée
-        acc += wimg * sky3 * v3
-        acc2 += (wimg * wimg) * sky3 * v3
-        cnt += sky3 * v3
+        if fast:  # poids ciel × validité calculé une seule fois
+            wt = sky3 * v3
+            acc += wimg * wt
+            acc2 += wimg * wimg * wt
+            cnt += wt
+        else:
+            acc += wimg * sky3 * v3
+            acc2 += (wimg * wimg) * sky3 * v3
+            cnt += sky3 * v3
         fg_acc += img[r0:r1] * fg3
         fg_cnt += fg3
         cb(2, i, f"Statistiques ciel {i + 1}/{n}")
@@ -127,15 +150,26 @@ def _stack_rows(get_frame, transforms, fg_b, size, r0, r1, mode, kappa, cb):
     if mode == "sigma":
         acc3 = np.zeros_like(acc)
         cnt3 = np.zeros((bh, w, 1), np.float32)
+        lim = kappa * std  # seuil de rejet, calculé une fois
         for i in range(n):
-            img = np.asarray(get_frame(i), dtype=np.float32)
-            if img.shape[:2] != (h, w):
-                raise ValueError(f"Image {i} : taille {img.shape[:2]} != référence {(h, w)}")
-            wimg, val = warp_to_ref_valid_band(img, transforms[i], size, r0, r1)
-            valid = (np.abs(wimg - mean) <= kappa * std).all(axis=2, keepdims=True) & safe & (val[..., None] > 0.5)
-            acc3 += wimg * valid * sky3
-            cnt3 += valid * sky3
+            if reuse:
+                wimg, val = wbuf[i], vbuf[i]
+            else:
+                img = np.asarray(get_frame(i), dtype=np.float32)
+                if img.shape[:2] != (h, w):
+                    raise ValueError(f"Image {i} : taille {img.shape[:2]} != référence {(h, w)}")
+                wimg, val = warp_to_ref_valid_band(img, transforms[i], size, r0, r1)
+            valid = (np.abs(wimg - mean) <= lim).all(axis=2, keepdims=True) & safe & (val[..., None] > 0.5)
+            if fast:
+                vs = valid * sky3
+                acc3 += wimg * vs
+                cnt3 += vs
+            else:
+                acc3 += wimg * valid * sky3
+                cnt3 += valid * sky3
             cb(3, i, f"Sigma clipping {i + 1}/{n}")
+        if reuse:
+            del wbuf, vbuf
         # là où le clipping a tout rejeté : moyenne de la passe 1 ; où aucune frame ne
         # couvre : la référence (non warpée) — jamais de bande noire
         fallback = np.where(safe, mean, ref_img if ref_img is not None else 0.0)

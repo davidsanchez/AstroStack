@@ -59,3 +59,28 @@ def test_progress_reports_band_tags_only_when_banded():
     stack_frames(lambda i: frames[i], transforms, fg, progress_cb=lambda s, i, n, m: msgs.append(m),
                  band_bytes=10**12)
     assert msgs and not any("[bande" in m for m in msgs)
+
+
+def test_fast_sigma_close_to_precise_and_bands_consistent():
+    frames, transforms, fg = _scene()
+    get = lambda i: frames[i]
+    precise = stack_frames(get, transforms, fg, mode="sigma", band_bytes=10**12)
+    fast_one = stack_frames(get, transforms, fg, mode="sigma", band_bytes=10**12, fast=True)
+    fast_banded = stack_frames(get, transforms, fg, mode="sigma", band_bytes=60 * 3 * 4 * 12 * 9, fast=True)
+    assert np.allclose(precise, fast_one, atol=1e-2)
+    assert np.allclose(fast_one, fast_banded, atol=1e-2)
+
+
+def test_fast_sigma_reuses_warps_instead_of_reloading_frames():
+    frames, transforms, fg = _scene()
+    calls = {"precise": 0, "fast": 0}
+
+    def counting(key):
+        def get(i):
+            calls[key] += 1
+            return frames[i]
+        return get
+
+    stack_frames(counting("precise"), transforms, fg, mode="sigma", band_bytes=10**12)
+    stack_frames(counting("fast"), transforms, fg, mode="sigma", band_bytes=10**12, fast=True)
+    assert calls["fast"] < calls["precise"]
