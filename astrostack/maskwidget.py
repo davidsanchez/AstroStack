@@ -25,6 +25,8 @@ class MaskEditor(ZoomMixin, QWidget):
         self._qimg: QImage | None = None
         self._mask: np.ndarray | None = None  # uint8 HxW, 255 = avant-plan peint
         self._margin_cache: np.ndarray | None = None  # v1.2.0 : extension (dilatation) affichée en orange
+        # v1.2.0 : calques RGBA pré-calculés (rouge, bleu, orange), mis à jour par zone au pinceau
+        self._rgba: dict[str, np.ndarray | None] = {"red": None, "blue": None, "orange": None}
         self._fit: np.ndarray | None = None   # v1.1.5 : uint8 HxW, 255 = zone exclue du CALCUL PL (nuages)
         self.paint_fit = False                # True : le pinceau peint la zone d'exclusion PL
         self.brush_size = 40  # diamètre en pixels de l'aperçu
@@ -37,12 +39,19 @@ class MaskEditor(ZoomMixin, QWidget):
         self._qimg = qimg
         self._mask = np.zeros((qimg.height(), qimg.width()), dtype=np.uint8)
         self._fit = np.zeros((qimg.height(), qimg.width()), dtype=np.uint8)
+        self._margin_cache = None
+        self._invalidate("red", "blue", "orange")
         self.refresh_zoom()
 
     def _content_size(self) -> tuple[int, int]:
         if self._qimg is None:
             return (0, 0)
         return (self._qimg.width(), self._qimg.height())
+
+    def _invalidate(self, *layers: str) -> None:
+        """Oublie les calques RGBA (reconstruits au prochain affichage)."""
+        for k in layers:
+            self._rgba[k] = None
 
     def image(self) -> QImage | None:
         """QImage actuellement affichée (pour alimenter le masque ML)."""
@@ -61,6 +70,7 @@ class MaskEditor(ZoomMixin, QWidget):
             m = cv2.resize(m, (self._qimg.width(), self._qimg.height()), interpolation=cv2.INTER_LINEAR)
         self._mask = m.astype(np.uint8)
         self._margin_cache = None
+        self._invalidate("red", "orange")
         self.update()
 
     def get_fit_mask(self) -> np.ndarray | None:
@@ -72,6 +82,7 @@ class MaskEditor(ZoomMixin, QWidget):
     def clear_fit_mask(self) -> None:
         if self._fit is not None:
             self._fit[:] = 0
+            self._invalidate("blue")
             self.update()
 
     def has_image(self) -> bool:
@@ -84,12 +95,14 @@ class MaskEditor(ZoomMixin, QWidget):
         if self._mask is not None:
             self._mask[:] = 0
             self._margin_cache = None
+            self._invalidate("red", "orange")
             self.update()
 
     def invert_mask(self) -> None:
         if self._mask is not None:
             self._mask = np.where(self._mask > 0, 0, 255).astype(np.uint8)
             self._margin_cache = None
+            self._invalidate("red", "orange")
             self.update()
 
     def auto_threshold(self, thr: int) -> None:
@@ -109,6 +122,7 @@ class MaskEditor(ZoomMixin, QWidget):
         mf = cv2.GaussianBlur(m.astype(np.float32), (5, 5), 0)
         self._mask = np.where(mf > 127, 255, 0).astype(np.uint8)
         self._margin_cache = None
+        self._invalidate("red", "orange")
         self.update()
 
     # --- peinture ---
@@ -147,6 +161,11 @@ class MaskEditor(ZoomMixin, QWidget):
         m = (xx - x) ** 2 + (yy - y) ** 2 <= r * r
         sub = target[y0:y1, x0:x1]
         sub[m] = 0 if self.erase else 255
+        # calque déjà construit : on ne met à jour que la boîte du pinceau
+        layer = "blue" if self.paint_fit else "red"
+        rgba = self._rgba[layer]
+        if rgba is not None:
+            rgba[y0:y1, x0:x1, 3] = (sub > 0).astype(np.uint8) * 110
         self.update()
 
     def mousePressEvent(self, ev) -> None:
@@ -165,6 +184,7 @@ class MaskEditor(ZoomMixin, QWidget):
         self._painting = False
         # la marge (dilatation) n'est recalculée qu'à la fin du trait, pas à chaque point
         self._margin_cache = None
+        self._invalidate("orange")
         self.update()
 
     # --- dessin ---
@@ -178,6 +198,34 @@ class MaskEditor(ZoomMixin, QWidget):
             self._margin_cache = ((dil > 0) & (base == 0)).astype(np.uint8)
         return self._margin_cache
 
+    def _layer(self, kind: str) -> np.ndarray | None:
+        """Calque RGBA (h, w, 4) du rouge (masque), du bleu (zone PL) ou de l'orange (marge)."""
+        if self._rgba[kind] is not None:
+            return self._rgba[kind]
+        if kind == "red":
+            if self._mask is None or self._qimg is None:
+                return None
+            a = np.zeros(self._mask.shape + (4,), np.uint8)
+            a[..., 0] = 255
+            a[..., 3] = (self._mask > 0).astype(np.uint8) * 110
+        elif kind == "blue":
+            if self._fit is None or self._qimg is None:
+                return None
+            a = np.zeros(self._fit.shape + (4,), np.uint8)
+            a[..., 1] = 140  # bleu : zone exclue du calcul PL seulement
+            a[..., 2] = 255
+            a[..., 3] = (self._fit > 0).astype(np.uint8) * 110
+        else:  # orange : extension par dilatation (marge)
+            if self._mask is None or self._qimg is None or not self._mask.any():
+                return None
+            mg = self._margin()
+            a = np.zeros(self._mask.shape + (4,), np.uint8)
+            a[..., 0] = 255
+            a[..., 1] = 140
+            a[..., 3] = mg * 150
+        self._rgba[kind] = a
+        return a
+
     def paintEvent(self, ev) -> None:
         p = QPainter(self)
         full = QRectF(0, 0, self.width(), self.height())
@@ -185,30 +233,14 @@ class MaskEditor(ZoomMixin, QWidget):
             p.drawImage(full, self._qimg)
         else:
             p.fillRect(self.rect(), QColor(30, 30, 30))
-        if self._qimg is not None and self._mask is not None:
-            h, w = self._mask.shape
-            rgba = np.zeros((h, w, 4), dtype=np.uint8)
-            rgba[..., 0] = 255  # rouge
-            rgba[..., 3] = (self._mask > 0).astype(np.uint8) * 110  # alpha
-            overlay = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
-            p.drawImage(full, overlay)
-            if self._mask.any():
-                mg = self._margin()
-                rgba2 = np.zeros((h, w, 4), dtype=np.uint8)
-                rgba2[..., 0] = 255
-                rgba2[..., 1] = 140   # orange : extension par dilatation (marge)
-                rgba2[..., 3] = mg * 150
-                ov2 = QImage(rgba2.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
-                p.drawImage(full, ov2)
-        if self._qimg is not None and self._fit is not None and self._fit.any():
-            h, w = self._fit.shape
-            rgba = np.zeros((h, w, 4), dtype=np.uint8)
-            rgba[..., 0] = 0
-            rgba[..., 1] = 140  # bleu : zone exclue du calcul PL seulement
-            rgba[..., 2] = 255
-            rgba[..., 3] = (self._fit > 0).astype(np.uint8) * 110
-            overlay_fit = QImage(rgba.data, w, h, 4 * w, QImage.Format_RGBA8888).copy()
-            p.drawImage(full, overlay_fit)
+        if self._qimg is not None:
+            for kind in ("red", "orange", "blue"):
+                a = self._layer(kind)
+                if a is None or (kind == "blue" and not self._fit.any()):
+                    continue
+                h, w = a.shape[:2]
+                ov = QImage(a.data, w, h, 4 * w, QImage.Format_RGBA8888)  # partage la mémoire du calque
+                p.drawImage(full, ov)
         if self._pos_w is not None:
             r = self._brush_px()
             p.setPen(QPen(QColor(255, 255, 255), 1))
