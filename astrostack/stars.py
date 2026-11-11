@@ -37,6 +37,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from .timing import Lap
+
 DET_MAX = 1600   # taille max de l'image de détection/appage (réduit la charge CPU/RAM)
 MIN_LOCAL = 40   # nombre min d'appariements fiables pour activer le warp local TPS
 
@@ -225,12 +227,34 @@ def _tps_eval(P: np.ndarray, w: np.ndarray, a: np.ndarray, X: np.ndarray, block:
     return out
 
 
+def _upsample_aligned(a: np.ndarray, h: int, w: int) -> np.ndarray:
+    """Agrandit une grille (h_c, w_c) en (h, w) par interpolation bilinéaire exacte, coins alignés
+    (le premier et le dernier point de la grille tombent sur les bords de l'image).
+    cv2.resize aligne les centres de pixels et cv2.remap quantifie au 1/32 de cellule :
+    tous deux décalent une map de coordonnées de plusieurs dixièmes de pixel."""
+    h_c, w_c = a.shape
+    xi = np.linspace(0.0, w_c - 1, w)
+    x0 = np.clip(np.floor(xi).astype(np.intp), 0, max(w_c - 2, 0))
+    fx = xi - x0
+    x1 = np.minimum(x0 + 1, w_c - 1)
+    rows = a[:, x0] * (1.0 - fx) + a[:, x1] * fx            # (h_c, w)
+    yi = np.linspace(0.0, h_c - 1, h)
+    y0 = np.clip(np.floor(yi).astype(np.intp), 0, max(h_c - 2, 0))
+    fy = (yi - y0)[:, None]
+    y1 = np.minimum(y0 + 1, h_c - 1)
+    return (rows[y0] * (1.0 - fy) + rows[y1] * fy).astype(np.float32)
+
+
+TPS_GRID_STEP = 4  # la TPS est évaluée tous les 4 px de la grille de détection, puis agrandie
+
+
 def _local_tps_maps(
     det_shape: tuple[int, int],
     src_det: np.ndarray,
     dst_det: np.ndarray,
     s: float,
     full_wh: tuple[int, int],
+    grid_step: int = TPS_GRID_STEP,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Construit les maps cv2.remap pleine résolution à partir des appariements (échelle det).
 
@@ -245,11 +269,19 @@ def _local_tps_maps(
     P = src_det.astype(np.float64) / D
     Q = dst_det.astype(np.float64) / D
     w_inv, a_inv = _tps_fit(Q, P)  # g : référence -> frame (normalisé)
-    yy, xx = np.mgrid[0:h_s, 0:w_s]
+    # la distorsion est lisse : on évalue la TPS sur une grille réduite (1 point / grid_step px)
+    # puis on agrandit les maps ; le coût passe de O(pixels x étoiles) à O(pixels/grid_step² x étoiles)
+    w_c = int(np.ceil((w_s - 1) / grid_step)) + 1
+    h_c = int(np.ceil((h_s - 1) / grid_step)) + 1
+    xs = np.linspace(0, w_s - 1, w_c)
+    ys = np.linspace(0, h_s - 1, h_c)
+    xx, yy = np.meshgrid(xs, ys)
     X = np.stack([xx.ravel(), yy.ravel()], axis=1).astype(np.float64) / D
-    G = _tps_eval(Q, w_inv, a_inv, X)  # coordonnées frame_s normalisées
-    mx_s = (G[:, 0] * D).reshape(h_s, w_s).astype(np.float32)
-    my_s = (G[:, 1] * D).reshape(h_s, w_s).astype(np.float32)
+    G = _tps_eval(Q, w_inv, a_inv, X)  # coordonnées frame_s normalisées, sur la grille réduite
+    mx_c = (G[:, 0] * D).reshape(h_c, w_c)
+    my_c = (G[:, 1] * D).reshape(h_c, w_c)
+    mx_s = _upsample_aligned(mx_c, h_s, w_s)
+    my_s = _upsample_aligned(my_c, h_s, w_s)
     mx = cv2.resize(mx_s, (w_f, h_f), interpolation=cv2.INTER_LINEAR) / s
     my = cv2.resize(my_s, (w_f, h_f), interpolation=cv2.INTER_LINEAR) / s
     return mx.astype(np.float32), my.astype(np.float32)
@@ -264,6 +296,7 @@ def estimate_alignment(
     refine_ecc: bool = True,
     refine_local: bool = True,
     min_local: int = MIN_LOCAL,
+    chrono=None,
 ):
     """Estime la transformation qui envoie l'image courante sur la référence.
 
@@ -286,6 +319,7 @@ def estimate_alignment(
         sw, sh = w, h
         ref_s, gray_s, mask_s = ref_gray, gray, sky_mask
     size_s = (sw, sh)
+    lap = Lap(chrono)  # chronométrage des sous-étapes (no-op sans chrono)
 
     # 1) translation grossière (gère les grandes dérives) — M_t = forward frame -> référence
     M_t, resp = phase_translation(ref_s, gray_s, mask_s)
@@ -295,6 +329,7 @@ def estimate_alignment(
     ref_pts = detect_stars(ref_s, mask=mask_s, max_stars=max_stars)
     pts = detect_stars(gray_w, mask=mask_s, max_stars=max_stars)
     src, dst = match_points(ref_pts, pts, max_dist=40.0)
+    lap.mark("alignement : translation + étoiles")
 
     info: dict = {
         "method": "phase",
@@ -336,6 +371,7 @@ def estimate_alignment(
             inl = m_in.ravel().astype(bool)
             method = "similitude"
 
+    lap.mark("alignement : RANSAC")
     if inl.any():
         info["inliers"] = int(inl.sum())
         info["rms"] = _rms(H_s, src_frame, dst, inl)
@@ -349,6 +385,7 @@ def estimate_alignment(
             info["ecc_cc"] = cc
             info["method"] = method + "+ecc"
 
+    lap.mark("alignement : ECC")
     # 5) warp local TPS : corrige la distorsion de l'objectif (traînées dans les coins)
     if refine_local and len(src) >= min_local:
         res = np.sqrt(((_apply3(H_s, src_frame) - dst) ** 2).sum(axis=1))
@@ -359,10 +396,12 @@ def estimate_alignment(
                 mx, my = _local_tps_maps((sh, sw), src_frame[keep], dst[keep], s, (w, h))
                 info["method"] += "+tps"
                 info["n_local"] = int(keep.sum())
+                lap.mark("alignement : warp local TPS")
                 return ("remap", mx, my), info
             except np.linalg.LinAlgError:
                 pass  # TPS mal conditionnée -> on garde l'homographie
 
+    lap.mark("alignement : repli")
     # 6) repli : homographie remise à pleine résolution, H_full = S⁻¹ · H_s · S
     S = np.diag([s, s, 1.0])
     H_full = np.linalg.inv(S) @ H_s @ S

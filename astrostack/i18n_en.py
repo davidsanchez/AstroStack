@@ -147,4 +147,10 @@ EN = {
     "Seuil": "Threshold",
     "I": "I",
     "X": "X",
+    "Dématriçage": "Demosaicing",
+    "Auto": "Auto",
+    "Linéaire": "Linear",
+    "Lectures parallèles": "Parallel reads",
+    "Algorithme de dématriçage des RAW. Auto : AHD en Précis, PPG en Rapide. Linéaire est le plus rapide mais le moins détaillé.": "RAW demosaicing algorithm. Auto: AHD in Precise, PPG in Fast. Linear is the fastest but the least detailed.",
+    "Nombre de RAW lus en parallèle. Ne change pas le résultat, mais consomme plus de mémoire.": "Number of RAW files read in parallel. Does not change the result, but uses more memory.",
 }

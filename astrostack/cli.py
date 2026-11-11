@@ -88,6 +88,10 @@ def main(argv=None) -> None:
     p.add_argument("--scale", type=float, default=1.0, help="1.0 = pleine résolution, 0.5 = moitié…")
     p.add_argument("--fast", action="store_true",
                    help="mode Rapide (peut légèrement modifier le résultat ; défaut = Précis)")
+    p.add_argument("--load-threads", type=int, default=2,
+                   help="RAW lus/dématricés en parallèle (lights et masters ; défaut 2)")
+    p.add_argument("--demosaic", choices=["auto", "ahd", "ppg", "linear"], default="auto",
+                   help="algorithme de dématriçage RAW (auto = AHD en Précis, PPG en Rapide)")
     p.add_argument(
         "--ref-index",
         type=int,
@@ -203,6 +207,8 @@ def main(argv=None) -> None:
         stack_grow=args.stack_grow,
         progress_cb=cb,
         fast=args.fast,
+        load_threads=args.load_threads,
+        demosaic=args.demosaic,
     )
     print("Terminé :", args.out)
 

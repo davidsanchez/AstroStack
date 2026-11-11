@@ -6,6 +6,7 @@ Fonction unique `run_pipeline`, utilisée par l'interface graphique (Qt) et par 
 from __future__ import annotations
 
 import os
+import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -14,6 +15,7 @@ import numpy as np
 
 from .imaging import tonemap_u16
 from .rawio import (
+    DEMOSAIC_CHOICES,
     build_bayer_master,
     build_master,
     calibrate,
@@ -23,6 +25,7 @@ from .rawio import (
     load_raw_calibrated_bayer,
 )
 from .stacker import feather, stack_frames
+from .timing import Chrono, Phases
 from .stars import estimate_alignment, luminance
 
 
@@ -82,6 +85,8 @@ def run_pipeline(
     progress_cb=None,
     should_cancel=None,
     fast: bool = False,
+    load_threads: int = 2,
+    demosaic: str = "auto",
 ) -> np.ndarray:
     """Exécute tout le pipeline. Retourne l'image résultat float32 HxWx3 (0..65535).
 
@@ -114,7 +119,15 @@ def run_pipeline(
     fast        : mode « Rapide » (False = « Précis », défaut). Peut modifier légèrement le
                   résultat : RAW décodés à demi-taille si scale <= 50 %, pas de recalcul des
                   poses en sigma clipping, arithmétique allégée.
+    load_threads: nombre de RAW lus/dématricés en parallèle (lights et masters). Ne change
+                  pas le résultat ; plus de mémoire (une image calibrée en plus par thread).
+    demosaic    : "auto" (AHD en Précis, PPG en Rapide), "ahd", "ppg" ou "linear" (RAW seulement).
     """
+    if demosaic not in DEMOSAIC_CHOICES:
+        raise ValueError(f"Dématriçage inconnu : {demosaic}")
+    if load_threads < 1:
+        raise ValueError("load_threads doit être >= 1")
+    dm = ("ppg" if fast else None) if demosaic == "auto" else demosaic
 
     def cb(stage, i, n, msg=""):
         if should_cancel is not None and should_cancel():
@@ -124,6 +137,9 @@ def run_pipeline(
 
     if not lights:
         raise ValueError("Aucune image light fournie.")
+    chrono = Chrono()  # temps de calibration par étape (affiché en fin d'empilement)
+    phases = Phases()  # temps réel par phase du run (affiché à la fin)
+    align_chrono = Chrono()  # sous-étapes de l'alignement (cumulées sur les images)
     if not (0 <= ref_index < len(lights)):
         ref_index = 0
     ref_path = lights[ref_index]
@@ -145,23 +161,25 @@ def run_pipeline(
     ref_shape = None
     if not use_bayer:
         try:
-            ref_pre = load_image_linear(ref_path, half=half)
+            ref_pre = load_image_linear(ref_path, half=half, chrono=chrono, demosaic=dm)
         except Exception as exc:
             raise RuntimeError(f"Impossible de lire la référence {ref_path} : {exc}") from exc
         ref_shape = ref_pre.shape[:2]
     if use_bayer:
         target = load_bayer(ref_path)[0].shape  # taille du Bayer de la référence
-        if darks:
-            bayer_dark = build_bayer_master(darks, "dark", target, cb)
-        if biases:
-            bayer_bias = build_bayer_master(biases, "bias", target, cb)
-        if flats:
-            bayer_flat = build_bayer_master(flats, "flat", target, cb)
+        with chrono.measure("masters Bayer (dark / bias / flat)"):
+            if darks:
+                bayer_dark = build_bayer_master(darks, "dark", target, cb, workers=load_threads)
+            if biases:
+                bayer_bias = build_bayer_master(biases, "bias", target, cb, workers=load_threads)
+            if flats:
+                bayer_flat = build_bayer_master(flats, "flat", target, cb, workers=load_threads)
         cb(0, 0, 1, "Calibration sur Bayer brut (dark/bias/flat soustraits avant dématriçage)")
     else:
-        master_dark = build_master(darks or [], "dark", cb, target_shape=ref_shape)
-        master_bias = build_master(biases or [], "bias", cb, target_shape=ref_shape)
-        master_flat = build_master(flats or [], "flat", cb, target_shape=ref_shape)
+        with chrono.measure("masters RGB (dark / bias / flat)"):
+            master_dark = build_master(darks or [], "dark", cb, target_shape=ref_shape, workers=load_threads)
+            master_bias = build_master(biases or [], "bias", cb, target_shape=ref_shape, workers=load_threads)
+            master_flat = build_master(flats or [], "flat", cb, target_shape=ref_shape, workers=load_threads)
 
     # masters post-dématriçage, construits à la demande uniquement si le repli en a besoin
     # (chemin Bayer dont l'écriture in-place a échoué) : sans eux, l'image n'était pas calibrée
@@ -171,23 +189,29 @@ def run_pipeline(
     def _fallback_masters():
         with fallback_lock:
             if not fallback_masters:
-                fallback_masters.append((
-                    build_master(darks or [], "dark"),
-                    build_master(biases or [], "bias"),
-                    build_master(flats or [], "flat"),
-                ))
+                with chrono.measure("masters RGB (repli)"):
+                    fallback_masters.append((
+                        build_master(darks or [], "dark"),
+                        build_master(biases or [], "bias"),
+                        build_master(flats or [], "flat"),
+                    ))
             return fallback_masters[0]
 
     def load_light(path: str) -> np.ndarray:
         """Charge une light calibrée (Bayer si possible, sinon RGB post-dématriçage)."""
         if use_bayer:
-            img = load_raw_calibrated_bayer(path, bayer_dark, bayer_bias, bayer_flat, half=half)
+            img = load_raw_calibrated_bayer(path, bayer_dark, bayer_bias, bayer_flat, half=half, chrono=chrono,
+                                            demosaic=dm)
             if img is not None:
                 return img
             # repli : calibration post-dématriçage avec les masters RGB
             md, mb, mf = _fallback_masters()
-            return calibrate(load_image_linear(path, half=half), md, mb, mf)
-        return calibrate(load_image_linear(path, half=half), master_dark, master_bias, master_flat)
+            rgb = load_image_linear(path, half=half, chrono=chrono, demosaic=dm)
+            with chrono.measure("calibration (repli, après dématriçage)"):
+                return calibrate(rgb, md, mb, mf)
+        rgb = load_image_linear(path, half=half, chrono=chrono, demosaic=dm)
+        with chrono.measure("calibration (après dématriçage)"):
+            return calibrate(rgb, master_dark, master_bias, master_flat)
 
     if ref_pre is not None:
         ref = np.asarray(calibrate(ref_pre, master_dark, master_bias, master_flat), dtype=np.float32)
@@ -238,12 +262,14 @@ def run_pipeline(
     cache[ref_index] = ref
     cache_bytes = ref.nbytes
     # v1.2.1 : lecture de l'image suivante en arrière-plan (lecture disque / décodage RAW)
-    loader = ThreadPoolExecutor(max_workers=2)
+    loader = ThreadPoolExecutor(max_workers=load_threads)
     pending: dict[int, object] = {}
 
     def _load_work(i: int) -> np.ndarray:
         try:
-            img = np.asarray(load_light(lights[i]), dtype=np.float32)
+            img_lin = load_light(lights[i])
+            with chrono.measure("conversion float32"):
+                img = np.asarray(img_lin, dtype=np.float32)
         except Exception as exc:
             raise RuntimeError(f"Impossible de lire {lights[i]} : {exc}") from exc
         if img.shape[:2] != wh:  # tailles différentes (autre appareil, JPEG, etc.) -> on redimensionne
@@ -251,15 +277,17 @@ def run_pipeline(
         return img
 
     def prefetch(i: int) -> None:
-        if (0 <= i < n and i not in cache and i not in pending and len(pending) < 2
-                and cache_bytes < CACHE_MAX_BYTES):
-            pending[i] = loader.submit(_load_work, i)
+        """Lance la lecture des images i, i+1, … (jusqu'à load_threads en attente)."""
+        for j in range(i, i + load_threads):
+            if (0 <= j < n and j not in cache and j not in pending and len(pending) < load_threads
+                    and cache_bytes < CACHE_MAX_BYTES):
+                pending[j] = loader.submit(_load_work, j)
 
     def _get_frame(i: int) -> np.ndarray:
         nonlocal cache_bytes
         if i in cache:
             return cache[i]
-        cb(1, i, n, f"Calibration {os.path.basename(lights[i])}")
+        cb(1, i, n, f"Décodage {os.path.basename(lights[i])}…")
         fut = pending.pop(i, None)
         img = fut.result() if fut is not None else _load_work(i)
         if cache_bytes < CACHE_MAX_BYTES:
@@ -272,6 +300,7 @@ def run_pipeline(
         return _get_frame(i)
 
     # --- alignement de chaque light sur la référence (phase + étoiles + homographie + ECC + TPS) ---
+    phases.mark("préparation")
     ref_gray = luminance(ref)
     transforms: list = [None] * n  # la référence est déjà dans sa géométrie
     for i in range(n):
@@ -279,9 +308,15 @@ def run_pipeline(
             continue
         if should_cancel is not None and should_cancel():
             raise CancelledError("Annulation demandée par l'utilisateur.")
+        t_get = time.perf_counter()
         img = get_frame(i)
+        t_dec = time.perf_counter() - t_get
         g = luminance(img)
-        M, info = estimate_alignment(ref_gray, g, sky, refine_ecc=refine_ecc, refine_local=refine_local)
+        cb(1, i, n, f"Alignement {i + 1}/{n} : {os.path.basename(lights[i])} en cours…")
+        t_al = time.perf_counter()
+        M, info = estimate_alignment(ref_gray, g, sky, refine_ecc=refine_ecc, refine_local=refine_local,
+                                     chrono=align_chrono)
+        t_al = time.perf_counter() - t_al
         transforms[i] = M
         rms = f"{info['rms']:.2f} px" if info["inliers"] else "n/a"
         cc = f", cc ECC {info['ecc_cc']:.3f}" if info.get("ecc_cc") == info.get("ecc_cc") else ""
@@ -291,16 +326,21 @@ def run_pipeline(
             i,
             n,
             f"Alignement {i + 1}/{n} : {os.path.basename(lights[i])} — "
+            f"décodage {t_dec:.1f} s, alignement {t_al:.1f} s — "
             f"méthode {info['method']}, {info['inliers']} inliers, rms {rms}{cc}{loc}, "
             f"{info['n_ref_stars']} étoiles détectées",
         )
 
+    phases.mark("alignement")
+    cb(2, n, n, f"Temps d'alignement (cumulés sur les images) — {align_chrono.summary()}")
     # --- empilement ---
     try:
         result = stack_frames(get_frame, transforms, fg_stack, mode=mode, kappa=kappa, progress_cb=cb,
                               fast=bool(fast))
     finally:
         loader.shutdown(wait=False, cancel_futures=True)
+    cb(4, n, n, f"Temps de calibration (cumulés sur les images) — {chrono.summary()}")
+    phases.mark("empilement")
     if meta_out is not None:  # données pour réappliquer la PL sans re-stacker
         meta_out["stack_raw"] = result
         meta_out["sky"] = sky
@@ -353,6 +393,7 @@ def run_pipeline(
         )
         cb(3, 1, 1, "Correction de la pollution lumineuse terminée.")
 
+    phases.mark("pollution lumineuse")
     if out_path:
         paths = _save_result(out_path, result, fg_w, fg_base=(m_raw_painted if mask is not None else None))
         cb(4, n, n, f"Écrit : {paths['tif']}")
@@ -365,4 +406,6 @@ def run_pipeline(
             disp = np.clip((b - lo) / max(hi - lo, 1e-6), 0, 1)
             iio.imwrite(base0 + "_fondPL.png", (disp * 255).round().astype(np.uint8))
             cb(4, n, n, f"Fond de pollution lumineuse écrit : {base0}_fondPL.png")
+    phases.mark("écriture")
+    cb(4, n, n, f"Temps réel par phase — {phases.summary()}")
     return result
