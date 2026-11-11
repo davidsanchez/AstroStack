@@ -227,12 +227,34 @@ def _tps_eval(P: np.ndarray, w: np.ndarray, a: np.ndarray, X: np.ndarray, block:
     return out
 
 
+def _upsample_aligned(a: np.ndarray, h: int, w: int) -> np.ndarray:
+    """Agrandit une grille (h_c, w_c) en (h, w) par interpolation bilinéaire exacte, coins alignés
+    (le premier et le dernier point de la grille tombent sur les bords de l'image).
+    cv2.resize aligne les centres de pixels et cv2.remap quantifie au 1/32 de cellule :
+    tous deux décalent une map de coordonnées de plusieurs dixièmes de pixel."""
+    h_c, w_c = a.shape
+    xi = np.linspace(0.0, w_c - 1, w)
+    x0 = np.clip(np.floor(xi).astype(np.intp), 0, max(w_c - 2, 0))
+    fx = xi - x0
+    x1 = np.minimum(x0 + 1, w_c - 1)
+    rows = a[:, x0] * (1.0 - fx) + a[:, x1] * fx            # (h_c, w)
+    yi = np.linspace(0.0, h_c - 1, h)
+    y0 = np.clip(np.floor(yi).astype(np.intp), 0, max(h_c - 2, 0))
+    fy = (yi - y0)[:, None]
+    y1 = np.minimum(y0 + 1, h_c - 1)
+    return (rows[y0] * (1.0 - fy) + rows[y1] * fy).astype(np.float32)
+
+
+TPS_GRID_STEP = 4  # la TPS est évaluée tous les 4 px de la grille de détection, puis agrandie
+
+
 def _local_tps_maps(
     det_shape: tuple[int, int],
     src_det: np.ndarray,
     dst_det: np.ndarray,
     s: float,
     full_wh: tuple[int, int],
+    grid_step: int = TPS_GRID_STEP,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Construit les maps cv2.remap pleine résolution à partir des appariements (échelle det).
 
@@ -247,11 +269,19 @@ def _local_tps_maps(
     P = src_det.astype(np.float64) / D
     Q = dst_det.astype(np.float64) / D
     w_inv, a_inv = _tps_fit(Q, P)  # g : référence -> frame (normalisé)
-    yy, xx = np.mgrid[0:h_s, 0:w_s]
+    # la distorsion est lisse : on évalue la TPS sur une grille réduite (1 point / grid_step px)
+    # puis on agrandit les maps ; le coût passe de O(pixels x étoiles) à O(pixels/grid_step² x étoiles)
+    w_c = int(np.ceil((w_s - 1) / grid_step)) + 1
+    h_c = int(np.ceil((h_s - 1) / grid_step)) + 1
+    xs = np.linspace(0, w_s - 1, w_c)
+    ys = np.linspace(0, h_s - 1, h_c)
+    xx, yy = np.meshgrid(xs, ys)
     X = np.stack([xx.ravel(), yy.ravel()], axis=1).astype(np.float64) / D
-    G = _tps_eval(Q, w_inv, a_inv, X)  # coordonnées frame_s normalisées
-    mx_s = (G[:, 0] * D).reshape(h_s, w_s).astype(np.float32)
-    my_s = (G[:, 1] * D).reshape(h_s, w_s).astype(np.float32)
+    G = _tps_eval(Q, w_inv, a_inv, X)  # coordonnées frame_s normalisées, sur la grille réduite
+    mx_c = (G[:, 0] * D).reshape(h_c, w_c)
+    my_c = (G[:, 1] * D).reshape(h_c, w_c)
+    mx_s = _upsample_aligned(mx_c, h_s, w_s)
+    my_s = _upsample_aligned(my_c, h_s, w_s)
     mx = cv2.resize(mx_s, (w_f, h_f), interpolation=cv2.INTER_LINEAR) / s
     my = cv2.resize(my_s, (w_f, h_f), interpolation=cv2.INTER_LINEAR) / s
     return mx.astype(np.float32), my.astype(np.float32)
