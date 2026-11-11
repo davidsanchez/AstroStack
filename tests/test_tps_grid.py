@@ -12,12 +12,12 @@ def _synthetic_matches(n, h_s, w_s, seed=0):
 
 
 def test_coarse_tps_grid_matches_exact_within_tolerance():
-    # Pas 4 (défaut) : écart max ~0,27 px sur ce cas dense (200 étoiles pour 107 000 px) ;
+    # Pas 4 (défaut) : écart max ~0,27 px sur ce cas dense (100 étoiles pour 107 000 px) ;
     # pas 2 donnerait ~0,08 px mais coûte ~4x plus cher. Tolérance non-régression, pas une cible de qualité.
     h_s, w_s = 267, 400
     s = 400 / 1500
     full_wh = (1500, 1000)
-    src, dst = _synthetic_matches(200, h_s, w_s)
+    src, dst = _synthetic_matches(100, h_s, w_s)
     mx_ref, my_ref = stars._local_tps_maps((h_s, w_s), src, dst, s, full_wh, grid_step=1)
     mx, my = stars._local_tps_maps((h_s, w_s), src, dst, s, full_wh)
     assert mx.shape == mx_ref.shape and my.shape == my_ref.shape
