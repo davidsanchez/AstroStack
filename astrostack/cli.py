@@ -90,6 +90,8 @@ def main(argv=None) -> None:
                    help="mode Rapide (peut légèrement modifier le résultat ; défaut = Précis)")
     p.add_argument("--load-threads", type=int, default=2,
                    help="RAW lus/dématricés en parallèle (lights et masters ; défaut 2)")
+    p.add_argument("--stretched-tif", action="store_true",
+                   help="écrit aussi un TIFF 16 bits étiré (gamma 1/2.2) à côté du TIFF linéaire")
     p.add_argument("--demosaic", choices=["auto", "ahd", "ppg", "linear"], default="auto",
                    help="algorithme de dématriçage RAW (auto = AHD en Précis, PPG en Rapide)")
     p.add_argument(
@@ -209,6 +211,7 @@ def main(argv=None) -> None:
         fast=args.fast,
         load_threads=args.load_threads,
         demosaic=args.demosaic,
+        stretched_tif=args.stretched_tif,
     )
     print("Terminé :", args.out)
 

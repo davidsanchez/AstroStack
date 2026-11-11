@@ -151,6 +151,8 @@ EN = {
     "Auto": "Auto",
     "Linéaire": "Linear",
     "Lectures parallèles": "Parallel reads",
+    "Écrire aussi un TIFF étiré": "Also write a stretched TIFF",
+    "Crée à côté du TIFF linéaire une version 16 bits étirée (gamma 1/2,2), prête à regarder. Le TIFF linéaire reste celui à retoucher.": "Creates, next to the linear TIFF, a stretched 16-bit version (gamma 2.2), ready to view. The linear TIFF is still the one to edit.",
     "Algorithme de dématriçage des RAW. Auto : AHD en Précis, PPG en Rapide. Linéaire est le plus rapide mais le moins détaillé.": "RAW demosaicing algorithm. Auto: AHD in Precise, PPG in Fast. Linear is the fastest but the least detailed.",
     "Nombre de RAW lus en parallèle. Ne change pas le résultat, mais consomme plus de mémoire.": "Number of RAW files read in parallel. Does not change the result, but uses more memory.",
 }
