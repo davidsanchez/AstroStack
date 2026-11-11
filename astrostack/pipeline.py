@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 
-from .imaging import tonemap_u16
+from .imaging import stretch_u16, tonemap_u16
 from .rawio import (
     DEMOSAIC_CHOICES,
     build_bayer_master,
@@ -29,13 +29,18 @@ from .timing import Chrono, Phases
 from .stars import estimate_alignment, luminance
 
 
-def _save_result(out_path: str, result_f32: np.ndarray, fg_w: np.ndarray, fg_base: np.ndarray | None = None) -> dict:
+def _save_result(out_path: str, result_f32: np.ndarray, fg_w: np.ndarray, fg_base: np.ndarray | None = None,
+                 stretched: bool = False) -> dict:
     import imageio.v3 as iio
     import tifffile
 
     u16 = np.clip(result_f32, 0.0, 65535.0).round().astype(np.uint16)
     tifffile.imwrite(out_path, u16, photometric="rgb")
     base, _ = os.path.splitext(out_path)
+    stretched_path = None
+    if stretched:  # TIFF 16 bits étiré (gamma 1/2.2) : prêt à regarder, les données linéaires restent dans out_path
+        stretched_path = base + "_etire.tif"
+        tifffile.imwrite(stretched_path, stretch_u16(result_f32), photometric="rgb")
     preview_path = base + "_preview.png"
     iio.imwrite(preview_path, tonemap_u16(result_f32))
     mask_path = base + "_mask.png"
@@ -49,7 +54,7 @@ def _save_result(out_path: str, result_f32: np.ndarray, fg_w: np.ndarray, fg_bas
         iio.imwrite(mask_path, rgb)
     else:
         iio.imwrite(mask_path, (fg_w * 255.0).round().astype(np.uint8))
-    return {"tif": out_path, "preview": preview_path, "mask": mask_path}
+    return {"tif": out_path, "stretched": stretched_path, "preview": preview_path, "mask": mask_path}
 
 
 class CancelledError(RuntimeError):
@@ -87,6 +92,7 @@ def run_pipeline(
     fast: bool = False,
     load_threads: int = 2,
     demosaic: str = "auto",
+    stretched_tif: bool = False,
 ) -> np.ndarray:
     """Exécute tout le pipeline. Retourne l'image résultat float32 HxWx3 (0..65535).
 
@@ -395,8 +401,11 @@ def run_pipeline(
 
     phases.mark("pollution lumineuse")
     if out_path:
-        paths = _save_result(out_path, result, fg_w, fg_base=(m_raw_painted if mask is not None else None))
+        paths = _save_result(out_path, result, fg_w, fg_base=(m_raw_painted if mask is not None else None),
+                             stretched=stretched_tif)
         cb(4, n, n, f"Écrit : {paths['tif']}")
+        if paths.get("stretched"):
+            cb(4, n, n, f"TIFF étiré écrit : {paths['stretched']}")
         if lp_correct and lp_bg is not None:  # fond de pollution estimé, étiré pour l'œil
             import imageio.v3 as iio
 

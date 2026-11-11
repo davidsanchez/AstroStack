@@ -546,6 +546,12 @@ class MainWindow(QMainWindow):
             t("Nombre de RAW lus en parallèle. Ne change pas le résultat, mais consomme plus de mémoire.")
         )
         form.addRow(t("Lectures parallèles"), self.spin_threads)
+        self.chk_stretched = QCheckBox(t("Écrire aussi un TIFF étiré"))
+        self.chk_stretched.setToolTip(
+            t("Crée à côté du TIFF linéaire une version 16 bits étirée (gamma 1/2,2), prête à regarder. "
+              "Le TIFF linéaire reste celui à retoucher.")
+        )
+        form.addRow(self.chk_stretched)
         self._expert_mask += [form.labelForField(self.combo_demosaic), self.combo_demosaic,
                               form.labelForField(self.spin_threads), self.spin_threads]
         box_opt.addLayout(form)
@@ -1249,6 +1255,7 @@ class MainWindow(QMainWindow):
             fast=self.btn_speed.isChecked(),  # Précis / Rapide
             load_threads=self.spin_threads.value(),
             demosaic=["auto", "ahd", "ppg", "linear"][self.combo_demosaic.currentIndex()],
+            stretched_tif=self.chk_stretched.isChecked(),
         )
         self.btn_run.setEnabled(False)
         self.btn_stop.setEnabled(True)
