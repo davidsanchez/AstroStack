@@ -102,6 +102,7 @@ Les versions prêtes à installer sont publiées dans la page **Releases** du d�
   (ou : `xattr -dr com.apple.quarantine /Applications/AstroStack.app`).
 - **Windows (64 bits)** : `AstroStack-Setup-<version>.exe` → lancer l'installeur. SmartScreen peut afficher un
   avertissement (« éditeur inconnu ») : **Informations complémentaires → Exécuter quand même**.
+- **Linux (64 bits)** : `AstroStack-<version>-linux-x86_64.tar.gz` → extraire l'archive, puis lancer `AstroStack/AstroStack`. Si l'application ne démarre pas, installer les bibliothèques Qt/X11 de votre distribution, par exemple sous Debian/Ubuntu : `sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0`.
 
 Le masque ML (ONNX) est inclus ; son modèle (~14 Mo) est téléchargé au premier usage.
 

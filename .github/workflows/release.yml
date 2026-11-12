@@ -1,4 +1,4 @@
-# Build automatique à chaque tag v* (ex. v1.2.0) : application macOS (.dmg) et Windows (installeur .exe),
+# Build automatique à chaque tag v* (ex. v1.2.0) : application macOS (.dmg), Windows (installeur .exe) et Linux (.tar.gz),
 # publiées dans une Release GitHub. Lançable aussi à la main (Actions > Release > Run workflow).
 name: Release
 
@@ -20,6 +20,8 @@ jobs:
             platform: macos-arm64
           - os: windows-latest
             platform: windows-x64
+          - os: ubuntu-22.04        # glibc ancienne : le binaire tourne sur les distributions récentes
+            platform: linux-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +60,12 @@ jobs:
           hdiutil create -volname "AstroStack" -srcfolder dist/dmg -ov -format UDZO \
             "dist/AstroStack-${VERSION}-${{ matrix.platform }}.dmg"
 
+      - name: Archive Linux (.tar.gz)
+        if: runner.os == 'Linux'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          tar -C dist -czf "dist/AstroStack-${VERSION}-${{ matrix.platform }}.tar.gz" AstroStack
+
       - name: Installeur Windows (.exe)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -72,6 +80,7 @@ jobs:
           path: |
             dist/*.dmg
             dist/AstroStack-Setup-*.exe
+            dist/*.tar.gz
           if-no-files-found: error
 
   release:
